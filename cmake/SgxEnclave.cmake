@@ -248,6 +248,7 @@ function(sgx_add_sample)
     "$<$<COMPILE_LANGUAGE:CXX>:${SGX_SDK_INCLUDE_DIRECTORY}/stdc++/linux>"
     ${ARG_INCLUDE_DIRECTORIES}
     "${trusted_directory}"
+    "${CMAKE_SOURCE_DIR}/common"
     "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_options(${enclave_target} PRIVATE
     -m64 -mno-red-zone ${optimization_flags}
@@ -258,6 +259,7 @@ function(sgx_add_sample)
     "$<$<COMPILE_LANGUAGE:CXX>:-nostdinc++>"
     "$<$<COMPILE_LANGUAGE:CXX>:-include${SGX_SDK_INCLUDE_DIRECTORY}/libcxx/__sgx>"
     "$<$<COMPILE_LANGUAGE:CXX>:-D_LIBCPP_HAS_NO_VENDOR_AVAILABILITY_ANNOTATIONS>"
+    "-include${CMAKE_SOURCE_DIR}/common/atfield.h"
     "-I${SGX_CLANG_RESOURCE_INCLUDE_DIRECTORY}"
     ${ARG_ENCLAVE_COMPILE_OPTIONS})
   target_link_options(${enclave_target} PRIVATE

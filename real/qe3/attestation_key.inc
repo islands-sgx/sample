@@ -53,7 +53,7 @@ const uint32_t g_sgx_nistp256_r_m1[] = {//hard-coded value for n-1 where n is or
 #define HASH_DRBG_OUT_LEN 40 //320 bits
 static const char QE_ATT_STRING[] = "QE_ATT_DER";
 
-static qe3_error_t get_att_key_based_from_seal_key(sgx_ec256_private_t *p_att_priv_key,
+ATFIELD static qe3_error_t get_att_key_based_from_seal_key(sgx_ec256_private_t *p_att_priv_key,
     sgx_ec256_public_t  *p_att_pub_key,
     const sgx_key_id_t *p_req_key_id)
 {

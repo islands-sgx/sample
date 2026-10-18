@@ -1,4 +1,5 @@
 diff --git a/enclave/src/sabd-enclave.c b/enclave/src/sabd-enclave.c
+index 1585bff..7a75cc1 100644
 --- a/enclave/src/sabd-enclave.c
 +++ b/enclave/src/sabd-enclave.c
 @@ -67,7 +67,7 @@ expand_step128(__m128i k, __m128i k2) {
@@ -10,6 +11,15 @@ diff --git a/enclave/src/sabd-enclave.c b/enclave/src/sabd-enclave.c
    sabd_lookup_hash_salt_t hash_salt;
    hash_salt.sk[0]  = _mm_set_epi64x(hash_salt_64[0], hash_salt_64[1]);
    hash_salt.sk[1]  = expand_step128(hash_salt.sk[0], _mm_aeskeygenassist_si128(hash_salt.sk[0], 0x01));
+@@ -101,7 +101,7 @@ hash_slot_idx_t sabd_lookup_hash_slot(jid_t jid, sabd_lookup_hash_salt_t hash_sa
+   return _mm_cvtsi128_si32(hash) & ((1 << hash_table_order) - 1);
+ }
+ 
+-sgx_status_t sabd_lookup_hash(const jid_t *in_jids, size_t in_jid_count,
++ATFIELD sgx_status_t sabd_lookup_hash(const jid_t *in_jids, size_t in_jid_count,
+                               const jid_t *ab_jids, hash_slot_idx_t ab_jid_count,
+                               volatile uint8_t *in_ab_jids_result) {
+   const hash_slot_idx_t chain_length = CHAIN_JID_COUNT;
 @@ -118,11 +118,11 @@ sgx_status_t sabd_lookup_hash(const jid_t *in_jids, size_t in_jid_count,
    }
    _Static_assert((((hash_slot_idx_t) 1) << SABD_MAX_HASH_TABLE_ORDER) > 0, "hash_table_slot_count overflow");
@@ -106,7 +116,7 @@ diff --git a/enclave/src/sabd-enclave.c b/enclave/src/sabd-enclave.c
  
        // branch-less-ly trigger a hash table rebuild if too many ab jids hashed to this slot
        any_hash_slots_overflowed |= chain_idx > chain_length;
-@@ -309,7 +309,10 @@ sgx_status_t sgxsd_enclave_server_init(const sabd_start_args_t *p_args, sabd_state
+@@ -309,7 +309,10 @@ sgx_status_t sgxsd_enclave_server_init(const sabd_start_args_t *p_args, sabd_sta
      return SGX_ERROR_INVALID_PARAMETER;
    }
  

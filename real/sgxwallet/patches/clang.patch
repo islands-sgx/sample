@@ -1,7 +1,8 @@
 diff --git a/secure_enclave/EnclaveCommon.cpp b/secure_enclave/EnclaveCommon.cpp
+index 44622fc..46fa53b 100644
 --- a/secure_enclave/EnclaveCommon.cpp
 +++ b/secure_enclave/EnclaveCommon.cpp
-@@ -270,29 +270,3 @@
+@@ -270,29 +270,3 @@ bool hex2carray(const char *_hex, uint64_t *_bin_len, uint8_t *_bin) {
    return true;
  }
  
@@ -32,9 +33,10 @@ diff --git a/secure_enclave/EnclaveCommon.cpp b/secure_enclave/EnclaveCommon.cpp
 -void LOG_DEBUG(const char *_msg) { logMsg(L_DEBUG, _msg); };
 -void LOG_TRACE(const char *_msg) { logMsg(L_TRACE, _msg); };
 diff --git a/secure_enclave/EnclaveCommon.h b/secure_enclave/EnclaveCommon.h
+index 14b5b1b..dec89b5 100644
 --- a/secure_enclave/EnclaveCommon.h
 +++ b/secure_enclave/EnclaveCommon.h
-@@ -56,13 +56,11 @@
+@@ -56,13 +56,11 @@ void get_global_random(unsigned char *_randBuff, uint64_t size);
  
  EXTERNC uint8_t *getThreadLocalDecryptedDkgPoly();
  
@@ -54,6 +56,7 @@ diff --git a/secure_enclave/EnclaveCommon.h b/secure_enclave/EnclaveCommon.h
  extern domain_parameters curve;
  
 diff --git a/secure_enclave/MclUtils.cpp b/secure_enclave/MclUtils.cpp
+index e27e537..918856a 100644
 --- a/secure_enclave/MclUtils.cpp
 +++ b/secure_enclave/MclUtils.cpp
 @@ -1,8 +1,6 @@
@@ -65,7 +68,7 @@ diff --git a/secure_enclave/MclUtils.cpp b/secure_enclave/MclUtils.cpp
  
  // mcl expects: uint32_t readFunc(void* self, void* buf, uint32_t byteSize)
  static uint32_t mcl_sgx_rand(void *self, void *buf, uint32_t byteSize) {
-@@ -43,11 +41,7 @@
+@@ -43,11 +41,7 @@ void initMcl() {
    const mcl::bn::CurveParam cp = mcl::bn::BN_SNARK1;
    bool b = false;
    mcl::bn::initPairing(&b, cp);
@@ -79,9 +82,10 @@ diff --git a/secure_enclave/MclUtils.cpp b/secure_enclave/MclUtils.cpp
    // functions)
    mcl::fp::RandGen::setRandFunc(nullptr, mcl_sgx_rand);
 diff --git a/secure_enclave/secure_enclave.c b/secure_enclave/secure_enclave.c
+index 8ef4ecd..55a3e36 100644
 --- a/secure_enclave/secure_enclave.c
 +++ b/secure_enclave/secure_enclave.c
-@@ -201,7 +201,7 @@
+@@ -201,7 +201,7 @@ void trustedEnclaveInit(uint64_t _logLevel) {
      CALL_ONCE
      LOG_INFO(__FUNCTION__);
  
@@ -90,3 +94,177 @@ diff --git a/secure_enclave/secure_enclave.c b/secure_enclave/secure_enclave.c
  
      oc_realloc_func = &reallocate_function;
      oc_free_func = &free_function;
+@@ -589,15 +589,9 @@ static void sealHexSEKOnce(int *errStatus, char *errString,
+     sealHexSEK(errStatus, errString, encrypted_sek, enc_len, sek_hex);
+ }
+ 
+-void trustedGenerateSEK(int *errStatus, char *errString,
+-                        uint8_t *encrypted_sek, uint64_t *enc_len, char *sek_hex) {
+-    CALL_ONCE
+-    LOG_INFO(__FUNCTION__);
+-    INIT_ERROR_STATE
+-
+-    CHECK_STATE(encrypted_sek);
+-    CHECK_STATE(sek_hex);
+-
++ATFIELD static void generate_sek_field(int *errStatus, char *errString,
++                                       uint8_t *encrypted_sek, uint64_t *enc_len,
++                                       char *sek_hex) {
+     generate_sek(&(AES_key[512]), sek_hex);
+ 
+     sealHexSEKOnce(errStatus, errString, encrypted_sek, enc_len, sek_hex);
+@@ -614,11 +608,20 @@ void trustedGenerateSEK(int *errStatus, char *errString,
+     LOG_INFO("SGX call completed");
+ }
+ 
+-void trustedSetSEK(int *errStatus, char *errString, uint8_t *encrypted_sek) {
++void trustedGenerateSEK(int *errStatus, char *errString,
++                        uint8_t *encrypted_sek, uint64_t *enc_len, char *sek_hex) {
+     CALL_ONCE
+     LOG_INFO(__FUNCTION__);
+     INIT_ERROR_STATE
++
+     CHECK_STATE(encrypted_sek);
++    CHECK_STATE(sek_hex);
++
++    generate_sek_field(errStatus, errString, encrypted_sek, enc_len, sek_hex);
++}
++
++ATFIELD static void set_sek_field(int *errStatus, char *errString,
++                                  uint8_t *encrypted_sek) {
+     SAFE_CHAR_BUF(aes_key_hex, ENCLAVE_BUF_LEN);
+ 
+     uint32_t dec_len = ENCLAVE_BUF_LEN;
+@@ -647,6 +650,15 @@ void trustedSetSEK(int *errStatus, char *errString, uint8_t *encrypted_sek) {
+     LOG_INFO("SGX call completed");
+ }
+ 
++void trustedSetSEK(int *errStatus, char *errString, uint8_t *encrypted_sek) {
++    CALL_ONCE
++    LOG_INFO(__FUNCTION__);
++    INIT_ERROR_STATE
++    CHECK_STATE(encrypted_sek);
++
++    set_sek_field(errStatus, errString, encrypted_sek);
++}
++
+ void trustedSetSEKBackup(int *errStatus, char *errString,
+                           uint8_t *encrypted_sek, uint64_t *enc_len, const char *sek_hex) {
+     CALL_ONCE
+@@ -829,15 +841,11 @@ void trustedAbortDBReencrypt(int *errStatus, char *errString) {
+     LOG_INFO("SGX call completed");
+ }
+ 
+-void trustedGenerateEcdsaKey(int *errStatus, char *errString, int *is_exportable,
+-                                uint8_t *encryptedPrivateKey, uint64_t *enc_len, char *pub_key_x, char *pub_key_y) {
+-    LOG_INFO(__FUNCTION__);
+-    INIT_ERROR_STATE
+-
+-    CHECK_STATE(encryptedPrivateKey);
+-    CHECK_STATE(pub_key_x);
+-    CHECK_STATE(pub_key_y);
+-
++ATFIELD static void generate_ecdsa_key_field(int *errStatus, char *errString,
++                                             int *is_exportable,
++                                             uint8_t *encryptedPrivateKey,
++                                             uint64_t *enc_len, char *pub_key_x,
++                                             char *pub_key_y) {
+     RANDOM_CHAR_BUF(rand_char, 32);
+ 
+     mpz_t seed;
+@@ -894,11 +902,24 @@ void trustedGenerateEcdsaKey(int *errStatus, char *errString, int *is_exportable
+     LOG_INFO("SGX call completed");
+ }
+ 
+-void trustedGetPublicEcdsaKey(int *errStatus, char *errString,
+-                                 uint8_t *encryptedPrivateKey, uint64_t enc_len, char *pub_key_x, char *pub_key_y) {
+-    LOG_DEBUG(__FUNCTION__);
++void trustedGenerateEcdsaKey(int *errStatus, char *errString, int *is_exportable,
++                                uint8_t *encryptedPrivateKey, uint64_t *enc_len, char *pub_key_x, char *pub_key_y) {
++    LOG_INFO(__FUNCTION__);
+     INIT_ERROR_STATE
+ 
++    CHECK_STATE(encryptedPrivateKey);
++    CHECK_STATE(pub_key_x);
++    CHECK_STATE(pub_key_y);
++
++    generate_ecdsa_key_field(errStatus, errString, is_exportable,
++                             encryptedPrivateKey, enc_len, pub_key_x,
++                             pub_key_y);
++}
++
++ATFIELD static void get_public_ecdsa_key_field(int *errStatus, char *errString,
++                                               uint8_t *encryptedPrivateKey,
++                                               uint64_t enc_len, char *pub_key_x,
++                                               char *pub_key_y) {
+     SAFE_CHAR_BUF(skey, ENCLAVE_BUF_LEN);
+ 
+     mpz_t privateKeyMpz;
+@@ -907,10 +928,6 @@ void trustedGetPublicEcdsaKey(int *errStatus, char *errString,
+ 
+     point pKey_test = point_init();
+ 
+-    CHECK_STATE(encryptedPrivateKey);
+-    CHECK_STATE(pub_key_x);
+-    CHECK_STATE(pub_key_y);
+-
+     uint8_t type = 0;
+     uint8_t exportable = 0;
+ 
+@@ -952,19 +969,26 @@ void trustedGetPublicEcdsaKey(int *errStatus, char *errString,
+ 
+ }
+ 
+-static uint64_t sigCounter = 0;
+-
+-void trustedEcdsaSign(int *errStatus, char *errString, uint8_t *encryptedPrivateKey, uint64_t enc_len,
+-                         const char *hash, char *sigR, char *sigS, uint8_t *sig_v, int base) {
++void trustedGetPublicEcdsaKey(int *errStatus, char *errString,
++                                 uint8_t *encryptedPrivateKey, uint64_t enc_len, char *pub_key_x, char *pub_key_y) {
+     LOG_DEBUG(__FUNCTION__);
+-
+     INIT_ERROR_STATE
+ 
+     CHECK_STATE(encryptedPrivateKey);
+-    CHECK_STATE(hash);
+-    CHECK_STATE(sigR);
+-    CHECK_STATE(sigS);
++    CHECK_STATE(pub_key_x);
++    CHECK_STATE(pub_key_y);
++
++    get_public_ecdsa_key_field(errStatus, errString, encryptedPrivateKey,
++                               enc_len, pub_key_x, pub_key_y);
++}
++
++static uint64_t sigCounter = 0;
+ 
++ATFIELD static void ecdsa_sign_field(int *errStatus, char *errString,
++                                     uint8_t *encryptedPrivateKey,
++                                     uint64_t enc_len, const char *hash,
++                                     char *sigR, char *sigS, uint8_t *sig_v,
++                                     int base) {
+     SAFE_CHAR_BUF(skey, ENCLAVE_BUF_LEN);
+ 
+     mpz_t privateKeyMpz;
+@@ -1046,6 +1070,21 @@ void trustedEcdsaSign(int *errStatus, char *errString, uint8_t *encryptedPrivate
+     LOG_DEBUG("SGX call completed");
+ }
+ 
++void trustedEcdsaSign(int *errStatus, char *errString, uint8_t *encryptedPrivateKey, uint64_t enc_len,
++                         const char *hash, char *sigR, char *sigS, uint8_t *sig_v, int base) {
++    LOG_DEBUG(__FUNCTION__);
++
++    INIT_ERROR_STATE
++
++    CHECK_STATE(encryptedPrivateKey);
++    CHECK_STATE(hash);
++    CHECK_STATE(sigR);
++    CHECK_STATE(sigS);
++
++    ecdsa_sign_field(errStatus, errString, encryptedPrivateKey, enc_len, hash,
++                     sigR, sigS, sig_v, base);
++}
++
+ void trustedDecryptKey(int *errStatus, char *errString, uint8_t *encryptedPrivateKey,
+                           uint64_t enc_len, char *key) {
+     LOG_DEBUG(__FUNCTION__);
