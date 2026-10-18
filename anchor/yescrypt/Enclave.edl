@@ -1,0 +1,6 @@
+enclave {
+    trusted {
+        /* Returns failed KAT count; covers YESCRYPT_DEFAULTS. */
+        public int ecall_yescrypt_selftest(void);
+    };
+};

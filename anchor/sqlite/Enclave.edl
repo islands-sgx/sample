@@ -1,0 +1,6 @@
+enclave {
+    trusted {
+        /* Returns 0 on success; non-zero on SQLite or self-test failure. */
+        public int ecall_sql_selftest(void);
+    };
+};

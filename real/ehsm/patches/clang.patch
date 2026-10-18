@@ -1,0 +1,128 @@
+diff --git a/core/Enclave/enclave_hsm.cpp b/core/Enclave/enclave_hsm.cpp
+--- a/core/Enclave/enclave_hsm.cpp
++++ b/core/Enclave/enclave_hsm.cpp
+@@ -31,6 +31,8 @@
+ 
+ #include "enclave_hsm_t.h"
+ 
++#include <string.h>
++
+ #include "datatypes.h"
+ #include "key_factory.h"
+ #include "key_operation.h"
+@@ -132,7 +134,8 @@
+         return SGX_ERROR_UNEXPECTED;
+ 
+     int retstatus;
+-    uint8_t dk_cipher[dk_cipher_len] = {0};
++    uint8_t dk_cipher[dk_cipher_len];
++    memset(dk_cipher, 0, dk_cipher_len);
+     uint8_t tmp[SGX_DOMAIN_KEY_SIZE] = {0};
+ 
+     ret = ocall_read_domain_key(&retstatus, dk_cipher, dk_cipher_len);
+diff --git a/core/Enclave/key_factory.h b/core/Enclave/key_factory.h
+--- a/core/Enclave/key_factory.h
++++ b/core/Enclave/key_factory.h
+@@ -39,7 +39,6 @@
+ 
+ #include "sgx_report.h"
+ #include "sgx_utils.h"
+-#include "sgx_tkey_exchange.h"
+ 
+ #ifndef _KEY_FACTORY_H_
+ #define _KEY_FACTORY_H_
+diff --git a/core/Enclave/key_operation.cpp b/core/Enclave/key_operation.cpp
+--- a/core/Enclave/key_operation.cpp
++++ b/core/Enclave/key_operation.cpp
+@@ -37,16 +37,6 @@
+ 
+ using namespace std;
+ 
+-void log_printf(uint32_t log_level, const char *filename, uint32_t line, const char *fmt, ...)
+-{
+-    char buf[BUFSIZ] = {'\0'};
+-    va_list ap;
+-    va_start(ap, fmt);
+-    vsnprintf(buf, BUFSIZ, fmt, ap);
+-    va_end(ap);
+-    ocall_print_string(log_level, buf, filename, line);
+-}
+-
+ /**
+  * @brief Get the block mode by keyspec
+  * @param keyspec the type of key
+diff --git a/core/Enclave/key_operation.h b/core/Enclave/key_operation.h
+--- a/core/Enclave/key_operation.h
++++ b/core/Enclave/key_operation.h
+@@ -38,12 +38,10 @@
+ 
+ #include "sgx_report.h"
+ #include "sgx_utils.h"
+-#include "sgx_tkey_exchange.h"
+ 
+ #ifndef _KEY_OPERATION_H_
+ #define _KEY_OPERATION_H_
+ 
+-void log_printf(uint32_t log_level, const char *filename, uint32_t line, const char *fmt, ...);
+ uint32_t getPaddingMode(ehsm_padding_mode_t padding_mode);
+ 
+ sgx_status_t ehsm_get_public_key(ehsm_keyblob_t *cmk_blob,
+diff --git a/core/Enclave/openssl_operation.cpp b/core/Enclave/openssl_operation.cpp
+--- a/core/Enclave/openssl_operation.cpp
++++ b/core/Enclave/openssl_operation.cpp
+@@ -40,7 +40,6 @@
+ 
+ #include "sgx_report.h"
+ #include "sgx_utils.h"
+-#include "sgx_tkey_exchange.h"
+ 
+ #include "datatypes.h"
+ #include "openssl/rsa.h"
+diff --git a/core/Enclave/openssl_operation.h b/core/Enclave/openssl_operation.h
+--- a/core/Enclave/openssl_operation.h
++++ b/core/Enclave/openssl_operation.h
+@@ -52,7 +52,6 @@
+ 
+ #include "sgx_report.h"
+ #include "sgx_utils.h"
+-#include "sgx_tkey_exchange.h"
+ 
+ sgx_status_t aes_gcm_encrypt(uint8_t *key, uint8_t *cipherblob,
+                              const EVP_CIPHER *block_mode,
+diff --git a/include/datatypes.h b/include/datatypes.h
+--- a/include/datatypes.h
++++ b/include/datatypes.h
+@@ -41,7 +41,6 @@
+ 
+ #include "sgx_report.h"
+ #include "sgx_utils.h"
+-#include "sgx_tkey_exchange.h"
+ 
+ #ifndef DATATYPES_H_
+ #define DATATYPES_H_
+diff --git a/utils/log4cplus/elog_utils.h b/utils/log4cplus/elog_utils.h
+--- a/utils/log4cplus/elog_utils.h
++++ b/utils/log4cplus/elog_utils.h
+@@ -44,18 +44,18 @@
+ /*
+     print info
+ */
+-#define log_i(...) log_printf(LOG_INFO, __FILE__, __LINE__, ##__VA_ARGS__)
++#define log_i(...) ((void)0)
+ /*
+     print debug
+ */
+-#define log_d(...) log_printf(LOG_DEBUG, __FILE__, __LINE__, ##__VA_ARGS__)
++#define log_d(...) ((void)0)
+ /*
+     print warn
+ */
+-#define log_w(...) log_printf(LOG_WARN, __FILE__, __LINE__, ##__VA_ARGS__)
++#define log_w(...) ((void)0)
+ /*
+     print error
+ */
+-#define log_e(...) log_printf(LOG_ERROR, __FILE__, __LINE__, ##__VA_ARGS__)
++#define log_e(...) ((void)0)
+ 
+ #endif

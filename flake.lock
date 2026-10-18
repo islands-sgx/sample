@@ -1,0 +1,45 @@
+{
+  "nodes": {
+    "llvm-project": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792376746,
+        "narHash": "sha256-Ww/AT86DCXzf8R0mDiYKvIyOpiVTdbNyeVMaT4vaZKc=",
+        "owner": "islands-sgx",
+        "repo": "llvm-llvmProject",
+        "rev": "b42d2c9d5fd27129a3049a43b6d1ca91c3f642d0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "islands-sgx",
+        "ref": "generic-anchor",
+        "repo": "llvm-llvmProject",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1788179007,
+        "narHash": "sha256-hn1oU2rue2SYK8dAr8+WNZWtbsz1S2W5mnHlSEuh3bo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "34ab99075ac4f7e40cf037eef32cb1c360bb85e9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "llvm-project": "llvm-project",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

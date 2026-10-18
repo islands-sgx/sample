@@ -1,0 +1,54 @@
+enclave {
+  from "sgx_tsgxssl.edl" import *;
+  from "sgx_tstdc.edl" import
+    sgx_thread_wait_untrusted_event_ocall,
+    sgx_thread_set_untrusted_event_ocall,
+    sgx_thread_setwait_untrusted_events_ocall,
+    sgx_thread_set_multiple_untrusted_events_ocall;
+
+  include "sgx_error.h"
+  include "sgx_trts.h"
+  include "sgx_quote_3.h"
+  include "datatypes.h"
+
+  untrusted {
+    int ocall_read_domain_key([out, size=cipher_dk_len] uint8_t *cipher_dk,
+                              uint32_t cipher_dk_len);
+    int ocall_store_domain_key([in, size=cipher_dk_len] uint8_t *cipher_dk,
+                               uint32_t cipher_dk_len);
+  };
+
+  trusted {
+    public sgx_status_t enclave_get_domain_key_from_local();
+    public sgx_status_t enclave_create_key(
+      [in, out, size=cmk_size] ehsm_keyblob_t *cmk,
+      size_t cmk_size);
+    public sgx_status_t enclave_encrypt(
+      [in, size=cmk_size] ehsm_keyblob_t *cmk,
+      size_t cmk_size,
+      [in, size=aad_size] ehsm_data_t *aad,
+      size_t aad_size,
+      [in, size=plaintext_size] ehsm_data_t *plaintext,
+      size_t plaintext_size,
+      [in, out, size=ciphertext_size] ehsm_data_t *ciphertext,
+      size_t ciphertext_size);
+    public sgx_status_t enclave_decrypt(
+      [in, size=cmk_size] ehsm_keyblob_t *cmk,
+      size_t cmk_size,
+      [in, size=aad_size] ehsm_data_t *aad,
+      size_t aad_size,
+      [in, size=ciphertext_size] ehsm_data_t *ciphertext,
+      size_t ciphertext_size,
+      [in, out, size=plaintext_size] ehsm_data_t *plaintext,
+      size_t plaintext_size);
+    public sgx_status_t enclave_generate_datakey(
+      [in, size=cmk_size] ehsm_keyblob_t *cmk,
+      size_t cmk_size,
+      [in, size=aad_size] ehsm_data_t *aad,
+      size_t aad_size,
+      [in, out, size=plaintext_size] ehsm_data_t *plaintext,
+      size_t plaintext_size,
+      [in, out, size=ciphertext_size] ehsm_data_t *ciphertext,
+      size_t ciphertext_size);
+  };
+};

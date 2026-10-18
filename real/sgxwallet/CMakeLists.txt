@@ -1,0 +1,38 @@
+set(SGXWALLET_ENCLAVE_DIRECTORY "${SGXWALLET_SOURCE_ROOT}/secure_enclave")
+
+find_package(OpenSSL REQUIRED)
+
+sgx_add_sample(
+  NAME sgxwallet
+  EDL secure_enclave.edl
+  CONFIG Enclave.config.xml
+  SOURCES
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/secure_enclave.c"
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/AESUtils.c"
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/Curves.c"
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/NumberTheory.c"
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/Point.c"
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/Signature.c"
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/DomainParameters.cpp"
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/EnclaveCommon.cpp"
+    "${SGXWALLET_ENCLAVE_DIRECTORY}/MclUtils.cpp"
+  HOST_SOURCES host.cpp
+  INCLUDE_DIRECTORIES
+    "${SGXWALLET_ENCLAVE_DIRECTORY}"
+    "${SGX_GMP_ROOT}/include"
+    "${SGX_MCL_ROOT}/include"
+  SEARCH_PATHS
+    "${SGXWALLET_ENCLAVE_DIRECTORY}"
+  TRUSTED_LIBRARIES
+    "${SGX_GMP_ROOT}/lib/libsgx_tgmp.a"
+    "${SGX_MCL_ROOT}/lib/libmcl_sgx.a"
+  HOST_INCLUDE_DIRECTORIES
+    "${SGXWALLET_ENCLAVE_DIRECTORY}"
+  HOST_LIBRARIES OpenSSL::Crypto
+  PROFILE PRERELEASE
+  OPTIMIZATION O3
+  ENCLAVE_COMPILE_OPTIONS
+    "-DMCL"
+    "$<$<COMPILE_LANGUAGE:CXX>:-fno-builtin>")
+
+target_compile_features(host PRIVATE cxx_std_17)

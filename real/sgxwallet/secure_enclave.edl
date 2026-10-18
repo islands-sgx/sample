@@ -1,0 +1,60 @@
+#define SMALL_BUF_SIZE 1024
+
+enclave {
+    from "sgx_tstdc.edl" import
+        sgx_thread_wait_untrusted_event_ocall,
+        sgx_thread_set_untrusted_event_ocall,
+        sgx_thread_setwait_untrusted_events_ocall,
+        sgx_thread_set_multiple_untrusted_events_ocall;
+
+    trusted {
+        public void trustedEnclaveInit(uint64_t _logLevel);
+
+        public void trustedEnclaveClear();
+
+        public void trustedGenerateSEK(
+                                [out] int *errStatus,
+                                [out, count = SMALL_BUF_SIZE] char *err_string,
+                                [out, count = SMALL_BUF_SIZE] uint8_t *encrypted_SEK,
+                                [out] uint64_t *enc_len,
+                                [out, count = 65] char* hex_SEK);
+
+        public void trustedSetSEK(
+                                [out] int *errStatus,
+                                [out, count = SMALL_BUF_SIZE] char *err_string,
+                                [in, count = SMALL_BUF_SIZE] uint8_t *encrypted_SEK);
+
+        public void trustedGenerateEcdsaKey(
+                                [out] int *errStatus,
+                                [out, count = SMALL_BUF_SIZE] char* err_string,
+                                [in, count = 1] int *is_exportable,
+                                [out, count = SMALL_BUF_SIZE] uint8_t* encrypted_key,
+                                [out] uint64_t *enc_len,
+                                [out, count = SMALL_BUF_SIZE] char *pub_key_x,
+                                [out, count = SMALL_BUF_SIZE] char *pub_key_y);
+
+        public void trustedGetPublicEcdsaKey(
+                                [out] int *errStatus,
+                                [out, count = SMALL_BUF_SIZE] char* err_string,
+                                [in, count = SMALL_BUF_SIZE] uint8_t* encrypted_key,
+                                uint64_t dec_len,
+                                [out, count = SMALL_BUF_SIZE] char *pub_key_x,
+                                [out, count = SMALL_BUF_SIZE] char *pub_key_y);
+
+        public void trustedEcdsaSign(
+                                [out] int *errStatus,
+                                [out, count = SMALL_BUF_SIZE] char* err_string,
+                                [in, count = SMALL_BUF_SIZE] uint8_t* encrypted_key,
+                                uint64_t enc_len,
+                                [in, string] const char* hash,
+                                [out, count = SMALL_BUF_SIZE] char* sig_r,
+                                [out, count = SMALL_BUF_SIZE] char* sig_s,
+                                [out] uint8_t* sig_v,
+                                int base);
+    };
+
+    untrusted {
+        uint64_t oc_realloc([user_check] void *optr, size_t osz, size_t nsz);
+        void oc_free([user_check] void *optr, size_t sz);
+    };
+};

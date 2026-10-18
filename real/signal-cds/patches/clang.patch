@@ -1,0 +1,120 @@
+diff --git a/enclave/src/sabd-enclave.c b/enclave/src/sabd-enclave.c
+--- a/enclave/src/sabd-enclave.c
++++ b/enclave/src/sabd-enclave.c
+@@ -67,7 +67,7 @@ expand_step128(__m128i k, __m128i k2) {
+   return _mm_xor_si128(k, k2);
+ }
+ static inline
+-sabd_lookup_hash_salt_t sabd_lookup_hash_salt(uint64_t hash_salt_64[2]) {
++sabd_lookup_hash_salt_t sabd_lookup_hash_salt(unsigned long long hash_salt_64[2]) {
+   sabd_lookup_hash_salt_t hash_salt;
+   hash_salt.sk[0]  = _mm_set_epi64x(hash_salt_64[0], hash_salt_64[1]);
+   hash_salt.sk[1]  = expand_step128(hash_salt.sk[0], _mm_aeskeygenassist_si128(hash_salt.sk[0], 0x01));
+@@ -118,11 +118,11 @@ sgx_status_t sabd_lookup_hash(const jid_t *in_jids, size_t in_jid_count,
+   }
+   _Static_assert((((hash_slot_idx_t) 1) << SABD_MAX_HASH_TABLE_ORDER) > 0, "hash_table_slot_count overflow");
+   hash_slot_idx_t hash_table_slot_count = ((hash_slot_idx_t) 1) << hash_table_order;
+-  _Static_assert((((hash_slot_idx_t) 1) << SABD_MAX_HASH_TABLE_ORDER) < (UINT32_MAX / chain_length), "hash_table_jid_count overflow");
++  _Static_assert((((hash_slot_idx_t) 1) << SABD_MAX_HASH_TABLE_ORDER) < (UINT32_MAX / CHAIN_JID_COUNT), "hash_table_jid_count overflow");
+   hash_slot_idx_t hash_table_jid_count = hash_table_slot_count * chain_length;
+ 
+   // allocate hash table and auxilary tables
+-  _Static_assert(hash_table_slot_count < (SIZE_MAX / sizeof(jid_t)) / chain_length, "hashed_ab_jids size overflow");
++  _Static_assert((((hash_slot_idx_t) 1) << SABD_MAX_HASH_TABLE_ORDER) < (SIZE_MAX / sizeof(jid_t)) / CHAIN_JID_COUNT, "hashed_ab_jids size overflow");
+   size_t hashed_ab_jids_size = hash_table_jid_count * sizeof(jid_t);
+   jid_t *hashed_ab_jids = memalign(CACHE_LINE_SIZE, hashed_ab_jids_size);
+   if (unlikely(hashed_ab_jids == NULL)) {
+@@ -149,7 +149,7 @@ sgx_status_t sabd_lookup_hash(const jid_t *in_jids, size_t in_jid_count,
+   bool hash_table_constructed = false;
+   for (uint32_t hash_table_tries = 0; !hash_table_constructed && likely(hash_table_tries < 128); hash_table_tries++) {
+     // generate random salt
+-    uint64_t hash_salt_64[2];
++    unsigned long long hash_salt_64[2];
+     bool hash_salt_rand_res = false;
+     for (uint32_t hash_salt_rand_tries = 0; likely(hash_salt_rand_tries < 10); hash_salt_rand_tries++) {
+       if (likely(_rdrand64_step(&hash_salt_64[0])) && likely(_rdrand64_step(&hash_salt_64[1]))) {
+@@ -167,12 +167,12 @@ sgx_status_t sabd_lookup_hash(const jid_t *in_jids, size_t in_jid_count,
+     for (hash_slot_idx_t hash_slot_idx = 0; likely(hash_slot_idx < hash_table_slot_count); hash_slot_idx++) {
+       // find ab jids to insert into the chain
+       // NB: these variables need to be allocated as registers and will leak information if on the stack!
+-      register __m256i chain_blocks[CHAIN_BLOCK_COUNT] = {0};
+-      register __m256i chain_block_masks[] = {
+-        _mm256_set_epi64x(UINT64_MAX - 0, UINT64_MAX - 1, UINT64_MAX - 2, UINT64_MAX - 3),
+-        _mm256_set_epi64x(UINT64_MAX - 4, UINT64_MAX - 5, UINT64_MAX - 6, UINT64_MAX - 7),
+-        _mm256_set_epi64x(UINT64_MAX - 8, UINT64_MAX - 9, UINT64_MAX - 10, UINT64_MAX - 11),
+-      };
++      register __m256i chain_block_0 = _mm256_setzero_si256();
++      register __m256i chain_block_1 = _mm256_setzero_si256();
++      register __m256i chain_block_2 = _mm256_setzero_si256();
++      register __m256i chain_block_mask_0 = _mm256_set_epi64x(UINT64_MAX - 0, UINT64_MAX - 1, UINT64_MAX - 2, UINT64_MAX - 3);
++      register __m256i chain_block_mask_1 = _mm256_set_epi64x(UINT64_MAX - 4, UINT64_MAX - 5, UINT64_MAX - 6, UINT64_MAX - 7);
++      register __m256i chain_block_mask_2 = _mm256_set_epi64x(UINT64_MAX - 8, UINT64_MAX - 9, UINT64_MAX - 10, UINT64_MAX - 11);
+       hash_slot_idx_t chain_idx = 0;
+       for (hash_slot_idx_t ab_jid_idx = 0; likely(ab_jid_idx < ab_jid_count); ab_jid_idx++) {
+         jid_t ab_jid = ab_jids[ab_jid_idx];
+@@ -184,37 +184,37 @@ sgx_status_t sabd_lookup_hash(const jid_t *in_jids, size_t in_jid_count,
+           (((uint64_t) (((int64_t) (((uint64_t) ab_jid_hash_slot_idx) ^ ((uint64_t) hash_slot_idx))) - 1))
+            >> (sizeof(hash_slot_idx) * 8)) & 1;
+         // NB: re-work above expression if this assert fails
+-        _Static_assert(((int64_t) (((uint64_t) ab_jid_hash_slot_idx) ^ ((uint64_t) hash_slot_idx))) >= 0, "hash_slot_matches overflow");
++        _Static_assert((uint64_t) UINT32_MAX <= INT64_MAX, "hash_slot_matches overflow");
+ 
+         // branch-less-ly find out if ab jid is already in chain
+-        __m256i chain_eq =                   _mm256_cmpeq_epi64(ab_jid_block, chain_blocks[0]);
+-        chain_eq = _mm256_or_si256(chain_eq, _mm256_cmpeq_epi64(ab_jid_block, chain_blocks[1]));
+-        chain_eq = _mm256_or_si256(chain_eq, _mm256_cmpeq_epi64(ab_jid_block, chain_blocks[2]));
++        __m256i chain_eq =                   _mm256_cmpeq_epi64(ab_jid_block, chain_block_0);
++        chain_eq = _mm256_or_si256(chain_eq, _mm256_cmpeq_epi64(ab_jid_block, chain_block_1));
++        chain_eq = _mm256_or_si256(chain_eq, _mm256_cmpeq_epi64(ab_jid_block, chain_block_2));
+         bool jid_not_in_chain = _mm256_testz_pd((__m256d) chain_eq, (__m256d) chain_eq);
+ 
+         // maybe insert ab jid into the chain
+         uint64_t should_insert_jid = hash_slot_matches & jid_not_in_chain;
+         chain_idx += should_insert_jid;
+ 
+-        chain_blocks[0] = (__m256i) _mm256_blendv_pd((__m256d) chain_blocks[0], (__m256d) ab_jid_block, (__m256d) chain_block_masks[0]);
+-        chain_blocks[1] = (__m256i) _mm256_blendv_pd((__m256d) chain_blocks[1], (__m256d) ab_jid_block, (__m256d) chain_block_masks[1]);
+-        chain_blocks[2] = (__m256i) _mm256_blendv_pd((__m256d) chain_blocks[2], (__m256d) ab_jid_block, (__m256d) chain_block_masks[2]);
++        chain_block_0 = (__m256i) _mm256_blendv_pd((__m256d) chain_block_0, (__m256d) ab_jid_block, (__m256d) chain_block_mask_0);
++        chain_block_1 = (__m256i) _mm256_blendv_pd((__m256d) chain_block_1, (__m256d) ab_jid_block, (__m256d) chain_block_mask_1);
++        chain_block_2 = (__m256i) _mm256_blendv_pd((__m256d) chain_block_2, (__m256d) ab_jid_block, (__m256d) chain_block_mask_2);
+ 
+-        chain_block_masks[0] = _mm256_add_epi64(chain_block_masks[0], _mm256_set1_epi64x(should_insert_jid));
+-        chain_block_masks[1] = _mm256_add_epi64(chain_block_masks[1], _mm256_set1_epi64x(should_insert_jid));
+-        chain_block_masks[2] = _mm256_add_epi64(chain_block_masks[2], _mm256_set1_epi64x(should_insert_jid));
++        chain_block_mask_0 = _mm256_add_epi64(chain_block_mask_0, _mm256_set1_epi64x(should_insert_jid));
++        chain_block_mask_1 = _mm256_add_epi64(chain_block_mask_1, _mm256_set1_epi64x(should_insert_jid));
++        chain_block_mask_2 = _mm256_add_epi64(chain_block_mask_2, _mm256_set1_epi64x(should_insert_jid));
+       }
+       // mask out last processed jid, with non-zero invalid values to force a cache line flush on write
+       __m256i dummy_block = _mm256_set1_epi8(UINT8_MAX);
+-      chain_blocks[0] = (__m256i) _mm256_blendv_pd((__m256d) chain_blocks[0], (__m256d) dummy_block, (__m256d) chain_block_masks[0]);
+-      chain_blocks[1] = (__m256i) _mm256_blendv_pd((__m256d) chain_blocks[1], (__m256d) dummy_block, (__m256d) chain_block_masks[1]);
+-      chain_blocks[2] = (__m256i) _mm256_blendv_pd((__m256d) chain_blocks[2], (__m256d) dummy_block, (__m256d) chain_block_masks[2]);
++      chain_block_0 = (__m256i) _mm256_blendv_pd((__m256d) chain_block_0, (__m256d) dummy_block, (__m256d) chain_block_mask_0);
++      chain_block_1 = (__m256i) _mm256_blendv_pd((__m256d) chain_block_1, (__m256d) dummy_block, (__m256d) chain_block_mask_1);
++      chain_block_2 = (__m256i) _mm256_blendv_pd((__m256d) chain_block_2, (__m256d) dummy_block, (__m256d) chain_block_mask_2);
+ 
+       // write out hash slot chain values
+       __m256i *p_chain_blocks = (__m256i *) &hashed_ab_jids[hash_slot_idx * chain_length];
+-      p_chain_blocks[0] = chain_blocks[0];
+-      p_chain_blocks[1] = chain_blocks[1];
+-      p_chain_blocks[2] = chain_blocks[2];
++      p_chain_blocks[0] = chain_block_0;
++      p_chain_blocks[1] = chain_block_1;
++      p_chain_blocks[2] = chain_block_2;
+ 
+       // branch-less-ly trigger a hash table rebuild if too many ab jids hashed to this slot
+       any_hash_slots_overflowed |= chain_idx > chain_length;
+@@ -309,7 +309,10 @@ sgx_status_t sgxsd_enclave_server_init(const sabd_start_args_t *p_args, sabd_state
+     return SGX_ERROR_INVALID_PARAMETER;
+   }
+ 
+-  _Static_assert(p_args->max_ab_jids < (SIZE_MAX - sizeof(sabd_state_t)) / sizeof(jid_t), "state_size overflow");
++  if (p_args->max_ab_jids >=
++      (SIZE_MAX - sizeof(sabd_state_t)) / sizeof(jid_t)) {
++    return SGX_ERROR_INVALID_PARAMETER;
++  }
+   size_t state_size = sizeof(sabd_state_t) + sizeof(jid_t) * p_args->max_ab_jids;
+   sabd_state_t *p_state = memalign(CACHE_LINE_SIZE, state_size);
+   if (p_state == NULL) {

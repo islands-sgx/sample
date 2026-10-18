@@ -1,0 +1,12 @@
+enclave {
+  include "sgx_error.h"
+
+  trusted {
+    public sgx_status_t ecall_lookup_hash(
+      [in, count=in_jid_count] const uint64_t *in_jids,
+      uint64_t in_jid_count,
+      [in, count=ab_jid_count] const uint64_t *ab_jids,
+      uint32_t ab_jid_count,
+      [in, out, count=ab_jid_count] uint8_t *in_ab_jids_result);
+  };
+};

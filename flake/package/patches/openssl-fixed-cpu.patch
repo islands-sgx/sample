@@ -1,0 +1,29 @@
+diff --git a/crypto/cpuid.c b/crypto/cpuid.c
+--- a/crypto/cpuid.c
++++ b/crypto/cpuid.c
+@@ -14,6 +14,17 @@
+ 
+ extern unsigned int OPENSSL_ia32cap_P[4];
+ 
++#if defined(SGXSSL_FIXED_CPU_PROFILE)
++# if !defined(OPENSSL_CPUID_OBJ)
++#  error fixed SGX CPU profile requires the x86-64 assembly backend
++# endif
++# include "sgxssl_cpu_profile.h"
++# define OPENSSL_CPUID_SETUP
++void OPENSSL_cpuid_setup(void)
++{
++    sgxssl_initialize_cpu_profile();
++}
++#else
+ #if defined(OPENSSL_CPUID_OBJ)
+ 
+ /*
+@@ -158,6 +169,7 @@
+ unsigned int OPENSSL_ia32cap_P[4];
+ #endif
+ #endif
++#endif
+ 
+ #ifndef OPENSSL_CPUID_OBJ
+ #ifndef OPENSSL_CPUID_SETUP

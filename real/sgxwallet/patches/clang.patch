@@ -1,0 +1,92 @@
+diff --git a/secure_enclave/EnclaveCommon.cpp b/secure_enclave/EnclaveCommon.cpp
+--- a/secure_enclave/EnclaveCommon.cpp
++++ b/secure_enclave/EnclaveCommon.cpp
+@@ -270,29 +270,3 @@
+   return true;
+ }
+ 
+-enum log_level {
+-  L_TRACE = 0,
+-  L_DEBUG = 1,
+-  L_INFO = 2,
+-  L_WARNING = 3,
+-  L_ERROR = 4
+-};
+-uint32_t globalLogLevel_ = 2;
+-
+-void logMsg(log_level _level, const char *_msg) {
+-  if (_level < globalLogLevel_)
+-    return;
+-  if (!_msg) {
+-    oc_printf("Null msg in logMsg");
+-    return;
+-  }
+-  oc_printf("***ENCLAVE_LOG***:");
+-  oc_printf(_msg);
+-  oc_printf("\n");
+-}
+-
+-void LOG_INFO(const char *_msg) { logMsg(L_INFO, _msg); };
+-void LOG_WARN(const char *_msg) { logMsg(L_WARNING, _msg); };
+-void LOG_ERROR(const char *_msg) { logMsg(L_ERROR, _msg); };
+-void LOG_DEBUG(const char *_msg) { logMsg(L_DEBUG, _msg); };
+-void LOG_TRACE(const char *_msg) { logMsg(L_TRACE, _msg); };
+diff --git a/secure_enclave/EnclaveCommon.h b/secure_enclave/EnclaveCommon.h
+--- a/secure_enclave/EnclaveCommon.h
++++ b/secure_enclave/EnclaveCommon.h
+@@ -56,13 +56,11 @@
+ 
+ EXTERNC uint8_t *getThreadLocalDecryptedDkgPoly();
+ 
+-EXTERNC void LOG_INFO(const char *msg);
+-EXTERNC void LOG_WARN(const char *_msg);
+-EXTERNC void LOG_ERROR(const char *_msg);
+-EXTERNC void LOG_DEBUG(const char *_msg);
+-EXTERNC void LOG_TRACE(const char *_msg);
+-
+-extern uint32_t globalLogLevel_;
++#define LOG_INFO(...) ((void)0)
++#define LOG_WARN(...) ((void)0)
++#define LOG_ERROR(...) ((void)0)
++#define LOG_DEBUG(...) ((void)0)
++#define LOG_TRACE(...) ((void)0)
+ 
+ extern domain_parameters curve;
+ 
+diff --git a/secure_enclave/MclUtils.cpp b/secure_enclave/MclUtils.cpp
+--- a/secure_enclave/MclUtils.cpp
++++ b/secure_enclave/MclUtils.cpp
+@@ -1,8 +1,6 @@
+ #include "MclUtils.h"
+ #include <sgx_trts.h>
+ 
+-// Forward declaration for enclave printing (defined in secure_enclave.c)
+-extern "C" void oc_printf(const char *str);
+ 
+ // mcl expects: uint32_t readFunc(void* self, void* buf, uint32_t byteSize)
+ static uint32_t mcl_sgx_rand(void *self, void *buf, uint32_t byteSize) {
+@@ -43,11 +41,7 @@
+   const mcl::bn::CurveParam cp = mcl::bn::BN_SNARK1;
+   bool b = false;
+   mcl::bn::initPairing(&b, cp);
+-  if (!b) {
+-    oc_printf("***ENCLAVE_LOG***:initMcl: mcl::bn::initPairing FAILED!\n");
+-  } else {
+-    oc_printf("***ENCLAVE_LOG***:initMcl: mcl::bn::initPairing succeeded\n");
+-  }
++  (void)b;
+   // Set custom random generator for SGX (may still be used by other MCL
+   // functions)
+   mcl::fp::RandGen::setRandFunc(nullptr, mcl_sgx_rand);
+diff --git a/secure_enclave/secure_enclave.c b/secure_enclave/secure_enclave.c
+--- a/secure_enclave/secure_enclave.c
++++ b/secure_enclave/secure_enclave.c
+@@ -201,7 +201,7 @@
+     CALL_ONCE
+     LOG_INFO(__FUNCTION__);
+ 
+-    globalLogLevel_ = _logLevel;
++    (void)_logLevel;
+ 
+     oc_realloc_func = &reallocate_function;
+     oc_free_func = &free_function;

@@ -1,0 +1,27 @@
+enclave {
+    trusted {
+        /* mul, square, from/to Montgomery, then mul. */
+        public void ecall_p384_mul(
+            [in, count=6] const uint64_t *a,
+            [in, count=6] const uint64_t *b,
+            [out, count=6] uint64_t *out);
+
+        /* Montgomery primitives used by the app KAT. */
+        public void ecall_p384_mul_mont(
+            [in, count=6] const uint64_t *a,
+            [in, count=6] const uint64_t *b,
+            [out, count=6] uint64_t *out);
+
+        public void ecall_p384_square_mont(
+            [in, count=6] const uint64_t *a,
+            [out, count=6] uint64_t *out);
+
+        public void ecall_p384_to_montgomery(
+            [in, count=6] const uint64_t *a,
+            [out, count=6] uint64_t *out);
+
+        public void ecall_p384_from_montgomery(
+            [in, count=6] const uint64_t *a,
+            [out, count=6] uint64_t *out);
+    };
+};

@@ -1,0 +1,180 @@
+{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.llvm-project.url = "github:islands-sgx/llvm-llvmProject/generic-anchor";
+  inputs.llvm-project.flake = false;
+
+  outputs =
+    inputs:
+    let
+      system = "x86_64-linux";
+      pkgs = import inputs.nixpkgs { inherit system; };
+      lib = pkgs.lib;
+      llvmPackages = pkgs.llvmPackages_22;
+      toolchain = import ./flake/toolchains.nix {
+        inherit pkgs llvmPackages;
+        llvmProject = inputs."llvm-project";
+      };
+      sgx = import ./flake/sgx.nix { inherit pkgs llvmPackages toolchain; };
+      libraries = import ./flake/libraries.nix {
+        inherit pkgs toolchain sgx;
+      };
+      real = import ./flake/real.nix {
+        inherit pkgs toolchain sgx;
+      };
+      anchorNames = [
+        "curve25519-donna"
+        "fiat-p384"
+        "sqlite"
+        "yescrypt"
+      ];
+      realNames = [
+        "ehsm"
+        "qe3"
+        "sgxwallet"
+        "signal-cds"
+      ];
+      modes = [
+        "raw"
+        "anchor"
+      ];
+      upstreamEnv = {
+        qe3 = {
+          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.qe3}";
+          ATFIELD_UPSTREAM_PACKAGE = real.sources.qe3.name;
+          QE3_SOURCE_ROOT = "${real.sources.qe3}";
+        };
+        ehsm = {
+          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.ehsm}";
+          ATFIELD_UPSTREAM_PACKAGE = real.sources.ehsm.name;
+          EHSM_SOURCE_ROOT = "${real.sources.ehsm}";
+        };
+        sgxwallet = {
+          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.sgxwallet}";
+          ATFIELD_UPSTREAM_PACKAGE = real.sources.sgxwallet.name;
+          SGXWALLET_SOURCE_ROOT = "${real.sources.sgxwallet}";
+        };
+        signal-cds = {
+          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.signalCds}";
+          ATFIELD_UPSTREAM_PACKAGE = real.sources.signalCds.name;
+          SIGNAL_CDS_SOURCE_ROOT = "${real.sources.signalCds}";
+        };
+      };
+      mkSampleShell =
+        group: name: mode:
+        let
+          sampleLibraries =
+            if group == "anchor" && name == "curve25519-donna" then
+              [ libraries."curve25519-donna".${mode} ]
+            else if group == "anchor" && name == "yescrypt" then
+              [ libraries.yescrypt.${mode} ]
+            else if group == "real" && name == "ehsm" then
+              [ real.libraries.sgxssl.${mode} ]
+            else if group == "real" && name == "sgxwallet" then
+              [
+                real.libraries.gmp.${mode}
+                real.libraries.mcl.${mode}
+              ]
+            else
+              [ ];
+          runtimeLibraries = [
+            pkgs.openssl
+            pkgs.stdenv.cc.cc.lib
+            pkgs.zlib
+            sgx.psw
+          ];
+        in
+        (pkgs.mkShell.override { stdenv = toolchain.stdenv; }) {
+          packages = [
+            pkgs.cmake
+            pkgs.coreutils
+            pkgs.ninja
+            pkgs.openssl
+            sgx.psw
+            sgx.sdk
+            sgx.trusted.${mode}
+            toolchain.atfieldLlc
+            toolchain.enclaveCompiler
+            toolchain.lld
+          ]
+          ++ sampleLibraries;
+          env = {
+            ATFIELD_ANCHOR_PREPARATION = if mode == "anchor" then "1" else "0";
+            ATFIELD_AR = "${toolchain.atfieldLlc}/bin/llvm-ar";
+            ATFIELD_CC = "${toolchain.stdenv.cc}/bin/cc";
+            ATFIELD_CXX = "${toolchain.stdenv.cc}/bin/c++";
+            ATFIELD_LLC = "${toolchain.atfieldLlc}/bin/llc";
+            ATFIELD_LLD = "${toolchain.lld}/bin/ld.lld";
+            ATFIELD_MODE = mode;
+            ATFIELD_NM = "${toolchain.atfieldLlc}/bin/llvm-nm";
+            ATFIELD_OBJCOPY = "${toolchain.atfieldLlc}/bin/llvm-objcopy";
+            ATFIELD_PAYLOAD_NAMESPACE = "${group}/${name}";
+            ATFIELD_RANLIB = "${toolchain.atfieldLlc}/bin/llvm-ranlib";
+            ATFIELD_READELF = "${toolchain.atfieldLlc}/bin/llvm-readelf";
+            ATFIELD_SAMPLE_SHELL = "${group}/${name}/${mode}";
+            LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibraries;
+            SGX_ARCH = "x64";
+            SGX_ENCLAVE_CLANG = "${toolchain.enclaveCompiler}/bin/enclave-clang-ir-consistent";
+            SGX_MODE = "HW";
+            SGX_PSW_ROOT = "${sgx.psw}";
+            SGX_SDK_ROOT = "${sgx.sdk}";
+            SGX_TRUSTED_LIB_ROOT = "${sgx.trusted.${mode}}";
+          }
+          // lib.optionalAttrs (group == "anchor" && name == "curve25519-donna") {
+            CURVE25519_DONNA_SGX_ROOT = "${builtins.head sampleLibraries}";
+          }
+          // lib.optionalAttrs (group == "anchor" && name == "yescrypt") {
+            YESCRYPT_SGX_ROOT = "${builtins.head sampleLibraries}";
+          }
+          // lib.optionalAttrs (group == "real" && name == "ehsm") {
+            SGXSSL_ROOT = "${real.libraries.sgxssl.${mode}}";
+          }
+          // lib.optionalAttrs (group == "real" && name == "sgxwallet") {
+            SGX_GMP_ROOT = "${real.libraries.gmp.${mode}}";
+            SGX_MCL_ROOT = "${real.libraries.mcl.${mode}}";
+          }
+          // lib.optionalAttrs (group == "real") upstreamEnv.${name};
+        };
+      sampleShells = lib.listToAttrs (
+        lib.concatMap (
+          name:
+          map (mode: lib.nameValuePair "anchor-${name}-${mode}" (mkSampleShell "anchor" name mode)) modes
+        ) anchorNames
+        ++ lib.concatMap (
+          name: map (mode: lib.nameValuePair "real-${name}-${mode}" (mkSampleShell "real" name mode)) modes
+        ) realNames
+      );
+      packageOutputs = {
+        atfield-llc = toolchain.atfieldLlc;
+        curve25519-donna-sgx-anchor = libraries."curve25519-donna".anchor;
+        curve25519-donna-sgx-raw = libraries."curve25519-donna".raw;
+        enclave-clang = toolchain.enclaveCompiler;
+        intel-sgx-gmp-anchor = real.libraries.gmp.anchor;
+        intel-sgx-gmp-raw = real.libraries.gmp.raw;
+        intel-sgx-ssl-anchor = real.libraries.sgxssl.anchor;
+        intel-sgx-ssl-raw = real.libraries.sgxssl.raw;
+        lld = toolchain.lld;
+        mcl-sgx-anchor = real.libraries.mcl.anchor;
+        mcl-sgx-raw = real.libraries.mcl.raw;
+        sgx-psw = sgx.psw;
+        sgx-sdk = sgx.sdk;
+        sgx-trusted-anchor = sgx.trusted.anchor;
+        sgx-trusted-raw = sgx.trusted.raw;
+        yescrypt-sgx-anchor = libraries.yescrypt.anchor;
+        yescrypt-sgx-raw = libraries.yescrypt.raw;
+      };
+    in
+    {
+      packages.${system} = packageOutputs;
+      devShells.${system} = {
+        default = pkgs.mkShell {
+          packages = [
+            pkgs.bun
+            pkgs.cmake
+            pkgs.just
+            pkgs.ninja
+          ];
+        };
+      }
+      // sampleShells;
+    };
+}

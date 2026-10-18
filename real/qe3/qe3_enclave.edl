@@ -1,0 +1,7 @@
+enclave {
+  trusted {
+    public uint32_t ecall_get_attestation_key(
+      [in, size=32] const uint8_t *key_id,
+      [out, size=64] uint8_t *public_key);
+  };
+};
