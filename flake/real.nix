@@ -44,6 +44,16 @@ in
       src = sgxSources.ehsm;
       patches = [ ../real/ehsm/patches/clang.patch ];
     };
+    ehsmOpt1 = pkgs.applyPatches {
+      name = "${sgxSources.ehsm.name}-opt-1-clang";
+      src = sgxSources.ehsm;
+      patches = [ ../real/ehsm-opt-1/patches/clang.patch ];
+    };
+    ehsmOpt2 = pkgs.applyPatches {
+      name = "${sgxSources.ehsm.name}-opt-2-clang";
+      src = sgxSources.ehsm;
+      patches = [ ../real/ehsm-opt-2/patches/clang.patch ];
+    };
     sgxwallet = pkgs.applyPatches {
       name = "${sgxSources.sgxwallet.name}-clang";
       src = sgxSources.sgxwallet;

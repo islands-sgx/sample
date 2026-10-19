@@ -37,6 +37,8 @@
       ];
       realNames = [
         "ehsm"
+        "ehsm-opt-1"
+        "ehsm-opt-2"
         "qe3"
         "sgxwallet"
         "signal-cds"
@@ -53,6 +55,16 @@
           ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.ehsm}";
           ATFIELD_UPSTREAM_PACKAGE = real.sources.ehsm.name;
           EHSM_SOURCE_ROOT = "${real.sources.ehsm}";
+        };
+        ehsm-opt-1 = {
+          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.ehsmOpt1}";
+          ATFIELD_UPSTREAM_PACKAGE = real.sources.ehsmOpt1.name;
+          EHSM_SOURCE_ROOT = "${real.sources.ehsmOpt1}";
+        };
+        ehsm-opt-2 = {
+          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.ehsmOpt2}";
+          ATFIELD_UPSTREAM_PACKAGE = real.sources.ehsmOpt2.name;
+          EHSM_SOURCE_ROOT = "${real.sources.ehsmOpt2}";
         };
         sgxwallet = {
           ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.sgxwallet}";
@@ -75,7 +87,7 @@
               [ libraries."curve25519-donna".${libraryMode} ]
             else if group == "anchor" && name == "yescrypt" then
               [ libraries.yescrypt.${libraryMode} ]
-            else if group == "real" && name == "ehsm" then
+            else if group == "real" && (lib.hasPrefix "ehsm" name) then
               [ real.libraries.sgxssl.${libraryMode} ]
             else if group == "real" && name == "sgxwallet" then
               [
@@ -157,7 +169,7 @@
           // lib.optionalAttrs (group == "anchor" && name == "yescrypt") {
             YESCRYPT_SGX_ROOT = "${builtins.head sampleLibraries}";
           }
-          // lib.optionalAttrs (group == "real" && name == "ehsm") {
+          // lib.optionalAttrs (group == "real" && (lib.hasPrefix "ehsm" name)) {
             SGXSSL_ROOT = "${real.libraries.sgxssl.${libraryMode}}";
           }
           // lib.optionalAttrs (group == "real" && name == "sgxwallet") {
