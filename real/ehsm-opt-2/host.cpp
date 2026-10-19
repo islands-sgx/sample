@@ -243,17 +243,157 @@ Data encrypt(sgx_enclave_id_t eid, Key &key, Data &aad, Data &plain)
     return out;
 }
 
+static constexpr size_t kCanaryBytes = 16;
+static constexpr uint8_t kCanaryByte = 0xA5;
+
+static void verify_canary(const char *step, const uint8_t *buf, size_t offset, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (buf[offset + i] != kCanaryByte) {
+            std::fprintf(stderr, "%s: boundary canary overwritten at +%zu (0x%02x != 0x%02x)\n",
+                         step, i, buf[offset + i], kCanaryByte);
+            throw Failure{};
+        }
+    }
+}
+
 Data decrypt(sgx_enclave_id_t eid, Key &key, Data &aad, Data &cipher)
 {
     if (cipher.get()->datalen <= kAesGcmOverheadBytes)
         throw Failure{};
-    Data out = data_buffer(cipher.get()->datalen - kAesGcmOverheadBytes);
+    uint32_t expected_len = cipher.get()->datalen - kAesGcmOverheadBytes;
+    Data out_with_canary = data_buffer(expected_len + kCanaryBytes);
+    std::memset(out_with_canary.get()->data, kCanaryByte, expected_len + kCanaryBytes);
+    out_with_canary.get()->datalen = expected_len;
+    uint32_t exact_abi_size = APPEND_SIZE_TO_DATA_T(expected_len);
     sgx_status_t r = SGX_ERROR_UNEXPECTED;
     auto s = enclave_decrypt(eid, &r, key.get(), key.size(), aad.get(),
                              aad.size(), cipher.get(), cipher.size(),
-                             out.get(), out.size());
+                             out_with_canary.get(), exact_abi_size);
     checked("decrypt", s, r);
-    return out;
+    if (out_with_canary.get()->datalen != expected_len) {
+        std::fprintf(stderr, "decrypt: unexpected output datalen %u != %u\n",
+                     out_with_canary.get()->datalen, expected_len);
+        throw Failure{};
+    }
+    verify_canary("decrypt exact canary", out_with_canary.get()->data, expected_len, kCanaryBytes);
+    Data clean = data_buffer(expected_len);
+    std::memcpy(clean.get()->data, out_with_canary.get()->data, expected_len);
+    return clean;
+}
+
+Data decrypt_oversized_capacity(sgx_enclave_id_t eid, Key &key, Data &aad, Data &cipher, uint32_t extra_cap)
+{
+    if (cipher.get()->datalen <= kAesGcmOverheadBytes)
+        throw Failure{};
+    uint32_t expected_len = cipher.get()->datalen - kAesGcmOverheadBytes;
+    uint32_t over_cap = expected_len + extra_cap;
+    Data out_with_canary = data_buffer(over_cap + kCanaryBytes);
+    std::memset(out_with_canary.get()->data, kCanaryByte, over_cap + kCanaryBytes);
+    out_with_canary.get()->datalen = over_cap;
+    uint32_t over_abi_size = APPEND_SIZE_TO_DATA_T(over_cap);
+    sgx_status_t r = SGX_ERROR_UNEXPECTED;
+    auto s = enclave_decrypt(eid, &r, key.get(), key.size(), aad.get(),
+                             aad.size(), cipher.get(), cipher.size(),
+                             out_with_canary.get(), over_abi_size);
+    checked("decrypt oversized capacity", s, r);
+    if (out_with_canary.get()->datalen != expected_len) {
+        std::fprintf(stderr, "decrypt oversized: datalen not normalized (%u != %u)\n",
+                     out_with_canary.get()->datalen, expected_len);
+        throw Failure{};
+    }
+    verify_canary("decrypt oversized canary", out_with_canary.get()->data, expected_len, extra_cap + kCanaryBytes);
+    Data clean = data_buffer(expected_len);
+    std::memcpy(clean.get()->data, out_with_canary.get()->data, expected_len);
+    return clean;
+}
+
+static void reject_short_decrypt_capacity(sgx_enclave_id_t eid, Key &key, Data &aad, Data &cipher)
+{
+    if (cipher.get()->datalen <= kAesGcmOverheadBytes)
+        throw Failure{};
+    uint32_t short_len = (cipher.get()->datalen - kAesGcmOverheadBytes) - 1;
+    Data short_out = data_buffer(short_len);
+    sgx_status_t result = SGX_ERROR_UNEXPECTED;
+    sgx_status_t transport = enclave_decrypt(
+        eid, &result, key.get(), key.size(), aad.get(), aad.size(),
+        cipher.get(), cipher.size(), short_out.get(), short_out.size());
+    expected_invalid_parameter("decrypt short output capacity", transport, result);
+}
+
+static void run_compat_and_sm4_matrix(sgx_enclave_id_t eid, Key &aes_key, Data &aad, Data &plain, Data &cipher)
+{
+    sgx_status_t r = SGX_ERROR_UNEXPECTED;
+    // 1. Legacy keybloblen == 0 query on enclave_create_key
+    Key query_key(0);
+    query_key.get()->metadata.origin = EH_INTERNAL_KEY;
+    query_key.get()->metadata.keyspec = EH_AES_GCM_256;
+    query_key.get()->metadata.keyusage = EH_KEYUSAGE_ENCRYPT_DECRYPT;
+    query_key.get()->keybloblen = 0;
+    checked("create_key size query",
+            enclave_create_key(eid, &r, query_key.get(), query_key.size()), r);
+    if (query_key.get()->keybloblen != kAesGcm256KeyBlobBytes) {
+        std::fprintf(stderr, "create_key query keybloblen=%u != %u\n",
+                     query_key.get()->keybloblen, kAesGcm256KeyBlobBytes);
+        throw Failure{};
+    }
+
+    // 2. Legacy datalen == 0 query on enclave_encrypt
+    Data enc_query = data_buffer(0);
+    checked("encrypt size query",
+            enclave_encrypt(eid, &r, aes_key.get(), aes_key.size(), aad.get(), aad.size(),
+                            plain.get(), plain.size(), enc_query.get(), enc_query.size()), r);
+    if (enc_query.get()->datalen != plain.get()->datalen + kAesGcmOverheadBytes)
+        throw Failure{};
+
+    // 3. Legacy datalen == 0 query on enclave_decrypt
+    Data dec_query = data_buffer(0);
+    checked("decrypt size query",
+            enclave_decrypt(eid, &r, aes_key.get(), aes_key.size(), aad.get(), aad.size(),
+                            cipher.get(), cipher.size(), dec_query.get(), dec_query.size()), r);
+    if (dec_query.get()->datalen != plain.get()->datalen)
+        throw Failure{};
+
+    // 4. Short ciphertext (< IV + MAC) rejection on enclave_decrypt
+    Data short_cipher = data_buffer(kAesGcmOverheadBytes - 1);
+    Data dummy_out = data_buffer(16);
+    expected_invalid_parameter(
+        "decrypt short ciphertext",
+        enclave_decrypt(eid, &r, aes_key.get(), aes_key.size(), aad.get(), aad.size(),
+                        short_cipher.get(), short_cipher.size(), dummy_out.get(), dummy_out.size()),
+        r);
+
+}
+
+static void run_sm4_producer_consumer_check(sgx_enclave_id_t eid, Data &aad)
+{
+    sgx_status_t r = SGX_ERROR_UNEXPECTED;
+    Key sm4_q(0);
+    sm4_q.get()->metadata.origin = EH_INTERNAL_KEY;
+    sm4_q.get()->metadata.keyspec = EH_SM4_CTR;
+    sm4_q.get()->metadata.keyusage = EH_KEYUSAGE_ENCRYPT_DECRYPT;
+    sm4_q.get()->keybloblen = 0;
+    checked("sm4 create_key query",
+            enclave_create_key(eid, &r, sm4_q.get(), sm4_q.size()), r);
+    if (sm4_q.get()->keybloblen == 0)
+        throw Failure{};
+    Key sm4_key(sm4_q.get()->keybloblen);
+    sm4_key.get()->metadata = sm4_q.get()->metadata;
+    sm4_key.get()->keybloblen = sm4_q.get()->keybloblen;
+    checked("sm4 create_key",
+            enclave_create_key(eid, &r, sm4_key.get(), sm4_key.size()), r);
+
+    Data sm4_dk_plain = data_buffer(16);
+    Data sm4_dk_cipher_q = data_buffer(0);
+    checked("sm4 generate_datakey query",
+            enclave_generate_datakey(eid, &r, sm4_key.get(), sm4_key.size(), aad.get(), aad.size(),
+                                     sm4_dk_plain.get(), sm4_dk_plain.size(),
+                                     sm4_dk_cipher_q.get(), sm4_dk_cipher_q.size()), r);
+    Data sm4_dk_cipher = data_buffer(sm4_dk_cipher_q.get()->datalen);
+    checked("sm4 generate_datakey",
+            enclave_generate_datakey(eid, &r, sm4_key.get(), sm4_key.size(), aad.get(), aad.size(),
+                                     sm4_dk_plain.get(), sm4_dk_plain.size(),
+                                     sm4_dk_cipher.get(), sm4_dk_cipher.size()), r);
 }
 
 static void roundtrip(sgx_enclave_id_t eid, Key &key, Data &aad, size_t bytes)
@@ -281,6 +421,8 @@ struct Options {
     size_t bytes = 32;
     size_t requests = 2;
     std::string domain_key = "domain-key.sealed";
+    bool compat_check = false;
+    bool sm4_check = false;
     bool help = false;
 };
 
@@ -312,6 +454,14 @@ static bool parse_size(const char *text, size_t *value)
 static bool parse_options(int argc, char **argv, Options *options)
 {
     for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--compat-check") == 0) {
+            options->compat_check = true;
+            continue;
+        }
+        if (std::strcmp(argv[i], "--sm4-check") == 0) {
+            options->sm4_check = true;
+            continue;
+        }
         if (std::strcmp(argv[i], "--help") == 0) {
             options->help = true;
             usage(argv[0]);
@@ -406,7 +556,7 @@ static int run(const Options &options)
                 tampered_plain.get(), tampered_plain.size());
             rejected("decrypt tampered", transport, result);
             mac_byte ^= 0x01;
-            Data restored = decrypt(enclave.id(), key, aad, saved_cipher);
+            Data restored = decrypt_oversized_capacity(enclave.id(), key, aad, saved_cipher, 64);
             require_equal("restored decrypt", restored, plaintext);
         }
 
@@ -422,9 +572,15 @@ static int run(const Options &options)
 
         roundtrip(enclave.id(), key, aad, 1);
         roundtrip(enclave.id(), key, aad, EH_ENCRYPT_MAX_SIZE);
-        reject_plaintext_length(enclave.id(), key, aad, 0);
+        reject_short_decrypt_capacity(enclave.id(), key, aad, saved_cipher);
         reject_plaintext_length(enclave.id(), key, aad,
                                 EH_ENCRYPT_MAX_SIZE + 1);
+        if (options.compat_check) {
+            run_compat_and_sm4_matrix(enclave.id(), key, aad, plaintext, saved_cipher);
+        }
+        if (options.sm4_check) {
+            run_sm4_producer_consumer_check(enclave.id(), aad);
+        }
 
         checked("destroy enclave", enclave.close(), SGX_SUCCESS);
     }
