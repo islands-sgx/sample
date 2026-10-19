@@ -212,53 +212,47 @@ static void fill_data(Data &data, uint8_t seed)
         data.get()->data[i] = static_cast<uint8_t>(seed + i * 31U);
 }
 
+static constexpr uint32_t kAesGcm256KeyBytes = 32;
+static constexpr uint32_t kAesGcmOverheadBytes =
+    EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE;
+static constexpr uint32_t kAesGcm256KeyBlobBytes =
+    EH_AES_GCM_256_SIZE;
+
 Key create_key(sgx_enclave_id_t eid)
 {
-    Key key(0);
+    Key key(kAesGcm256KeyBlobBytes);
     key.get()->metadata.keyspec = EH_AES_GCM_256;
     key.get()->metadata.origin = EH_INTERNAL_KEY;
     key.get()->metadata.keyusage = EH_KEYUSAGE_ENCRYPT_DECRYPT;
-    key.get()->keybloblen = 0;
+    key.get()->keybloblen = kAesGcm256KeyBlobBytes;
 
     sgx_status_t result = SGX_ERROR_UNEXPECTED;
     sgx_status_t transport = enclave_create_key(
         eid, &result, key.get(), key.size());
-    checked("create_key size", transport, result);
-
-    key.resize(key.get()->keybloblen);
-    transport = enclave_create_key(eid, &result, key.get(), key.size());
     checked("create_key", transport, result);
     return key;
 }
 
 Data encrypt(sgx_enclave_id_t eid, Key &key, Data &aad, Data &plain)
 {
-    Data out(0);
+    Data out = data_buffer(plain.get()->datalen + kAesGcmOverheadBytes);
     sgx_status_t r = SGX_ERROR_UNEXPECTED;
     auto s = enclave_encrypt(eid, &r, key.get(), key.size(), aad.get(),
                              aad.size(), plain.get(), plain.size(), out.get(),
                              out.size());
-    checked("encrypt size", s, r);
-    auto n = out.get()->datalen;
-    out.resize(n);
-    s = enclave_encrypt(eid, &r, key.get(), key.size(), aad.get(), aad.size(),
-                        plain.get(), plain.size(), out.get(), out.size());
     checked("encrypt", s, r);
     return out;
 }
 
 Data decrypt(sgx_enclave_id_t eid, Key &key, Data &aad, Data &cipher)
 {
-    Data out(0);
+    if (cipher.get()->datalen <= kAesGcmOverheadBytes)
+        throw Failure{};
+    Data out = data_buffer(cipher.get()->datalen - kAesGcmOverheadBytes);
     sgx_status_t r = SGX_ERROR_UNEXPECTED;
     auto s = enclave_decrypt(eid, &r, key.get(), key.size(), aad.get(),
                              aad.size(), cipher.get(), cipher.size(),
                              out.get(), out.size());
-    checked("decrypt size", s, r);
-    auto n = out.get()->datalen;
-    out.resize(n);
-    s = enclave_decrypt(eid, &r, key.get(), key.size(), aad.get(), aad.size(),
-                        cipher.get(), cipher.size(), out.get(), out.size());
     checked("decrypt", s, r);
     return out;
 }
@@ -390,14 +384,9 @@ static int run(const Options &options)
                 saved_cipher = std::move(cipher);
         }
 
-        Data datakey_plain = data_buffer(32);
-        Data datakey_cipher = data_buffer(0);
-        transport = enclave_generate_datakey(
-            enclave.id(), &result, key.get(), key.size(), aad.get(), aad.size(),
-            datakey_plain.get(), datakey_plain.size(), datakey_cipher.get(),
-            datakey_cipher.size());
-        checked("generate_datakey size", transport, result);
-        datakey_cipher.resize(datakey_cipher.get()->datalen);
+        Data datakey_plain = data_buffer(kAesGcm256KeyBytes);
+        Data datakey_cipher = data_buffer(
+            datakey_plain.get()->datalen + kAesGcmOverheadBytes);
         transport = enclave_generate_datakey(
             enclave.id(), &result, key.get(), key.size(), aad.get(), aad.size(),
             datakey_plain.get(), datakey_plain.size(), datakey_cipher.get(),

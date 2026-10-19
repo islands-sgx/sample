@@ -1,5 +1,5 @@
 diff --git a/core/Enclave/enclave_hsm.cpp b/core/Enclave/enclave_hsm.cpp
-index 7d913a7..a2a814f 100644
+index 7d913a7..1486a5a 100644
 --- a/core/Enclave/enclave_hsm.cpp
 +++ b/core/Enclave/enclave_hsm.cpp
 @@ -31,6 +31,8 @@
@@ -21,161 +21,172 @@ index 7d913a7..a2a814f 100644
      uint8_t tmp[SGX_DOMAIN_KEY_SIZE] = {0};
  
      ret = ocall_read_domain_key(&retstatus, dk_cipher, dk_cipher_len);
-@@ -205,6 +208,10 @@ sgx_status_t enclave_create_key(ehsm_keyblob_t *cmk, size_t cmk_size)
+@@ -205,6 +208,14 @@ sgx_status_t enclave_create_key(ehsm_keyblob_t *cmk, size_t cmk_size)
      case EH_AES_GCM_128:
      case EH_AES_GCM_192:
      case EH_AES_GCM_256:
 +        if (cmk->metadata.keyusage != EH_KEYUSAGE_ENCRYPT_DECRYPT)
 +            return SGX_ERROR_UNEXPECTED;
-+        if (cmk->keybloblen == 0)
-+            return ehsm_calc_keyblob_size(cmk->metadata.keyspec, cmk->keybloblen);
++        {
++            uint32_t expected_blob_len = 0;
++            if (ehsm_calc_keyblob_size(cmk->metadata.keyspec, expected_blob_len) != SGX_SUCCESS ||
++                cmk->keybloblen < expected_blob_len)
++                return SGX_ERROR_INVALID_PARAMETER;
++        }
          ret = ehsm_create_aes_key(cmk);
          break;
      case EH_RSA_2048:
-@@ -384,6 +391,13 @@ sgx_status_t enclave_encrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
+@@ -384,6 +395,8 @@ sgx_status_t enclave_encrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
      case EH_AES_GCM_128:
      case EH_AES_GCM_192:
      case EH_AES_GCM_256:
-+        if (ciphertext->datalen == 0)
-+        {
-+            ciphertext->datalen = plaintext->datalen + EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE;
-+            return SGX_SUCCESS;
-+        }
 +        if (ciphertext->datalen < plaintext->datalen + SGX_AESGCM_IV_SIZE + SGX_AESGCM_MAC_SIZE)
 +            return SGX_ERROR_INVALID_PARAMETER;
          ret = ehsm_aes_gcm_encrypt(aad, cmk, plaintext, ciphertext);
          break;
      case EH_SM4_CTR:
-@@ -433,6 +447,16 @@ sgx_status_t enclave_decrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
+@@ -433,6 +446,9 @@ sgx_status_t enclave_decrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
      case EH_AES_GCM_128:
      case EH_AES_GCM_192:
      case EH_AES_GCM_256:
-+        if (plaintext->datalen == 0)
-+        {
-+            if (ciphertext->datalen < EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE)
-+                return SGX_ERROR_INVALID_PARAMETER;
-+            plaintext->datalen = ciphertext->datalen - EH_AES_GCM_IV_SIZE - EH_AES_GCM_MAC_SIZE;
-+            return SGX_SUCCESS;
-+        }
-+        if (plaintext->datalen > EH_ENCRYPT_MAX_SIZE ||
++        if (plaintext->datalen == 0 || plaintext->datalen > EH_ENCRYPT_MAX_SIZE ||
 +            ciphertext->datalen < plaintext->datalen + SGX_AESGCM_IV_SIZE + SGX_AESGCM_MAC_SIZE)
 +            return SGX_ERROR_INVALID_PARAMETER;
          ret = ehsm_aes_gcm_decrypt(aad, cmk, ciphertext, plaintext);
          break;
      case EH_SM4_CTR:
-@@ -731,6 +755,58 @@ sgx_status_t enclave_verify(const ehsm_keyblob_t *cmk, size_t cmk_size,
+@@ -731,59 +747,13 @@ sgx_status_t enclave_verify(const ehsm_keyblob_t *cmk, size_t cmk_size,
   * @param ciphertext_size size of ciphertext
   * @return ehsm_status_t
   */
+-sgx_status_t enclave_generate_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
+-                                      ehsm_data_t *aad, size_t aad_size,
+-                                      ehsm_data_t *plaintext, size_t plaintext_size,
+-                                      ehsm_data_t *ciphertext, size_t ciphertext_size)
 +ATFIELD static sgx_status_t ehsm_generate_datakey(ehsm_keyblob_t *cmk,
 +                                                  ehsm_data_t *aad,
 +                                                  ehsm_data_t *plaintext,
 +                                                  ehsm_data_t *ciphertext)
+ {
+     sgx_status_t ret = SGX_ERROR_UNEXPECTED;
+-
+-    if (cmk == NULL ||
+-        cmk_size != APPEND_SIZE_TO_KEYBLOB_T(cmk->keybloblen) ||
+-        cmk->keybloblen == 0 ||
+-        cmk->metadata.origin != EH_INTERNAL_KEY ||
+-        cmk->metadata.keyusage != EH_KEYUSAGE_ENCRYPT_DECRYPT)
+-        return SGX_ERROR_INVALID_PARAMETER;
+-
+-    if (plaintext == NULL ||
+-        plaintext_size != APPEND_SIZE_TO_DATA_T(plaintext->datalen) ||
+-        plaintext->datalen > 1024 ||
+-        plaintext->datalen == 0)
+-        return SGX_ERROR_INVALID_PARAMETER;
+-
+-    if (aad != NULL && aad_size != APPEND_SIZE_TO_DATA_T(aad->datalen))
+-        return SGX_ERROR_INVALID_PARAMETER;
+-
+-    if (aad == NULL && aad_size != 0)
+-        return SGX_ERROR_INVALID_PARAMETER;
+-
+-    if (ciphertext == NULL ||
+-        ciphertext_size != APPEND_SIZE_TO_DATA_T(ciphertext->datalen))
+-        return SGX_ERROR_INVALID_PARAMETER;
+-
+-    if (ciphertext->datalen == 0)
+-    {
+-        switch (cmk->metadata.keyspec)
+-        {
+-        case EH_AES_GCM_128:
+-        case EH_AES_GCM_192:
+-        case EH_AES_GCM_256:
+-            ciphertext->datalen = plaintext->datalen + EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE;
+-            return SGX_SUCCESS;
+-        case EH_SM4_CBC:
+-            ciphertext->datalen = (plaintext->datalen / 16 + 1) * 16 + SGX_SM4_IV_SIZE;
+-            return SGX_SUCCESS;
+-        case EH_SM4_CTR:
+-            ciphertext->datalen = plaintext->datalen + SGX_SM4_IV_SIZE;
+-            return SGX_SUCCESS;
+-        default:
+-            return SGX_ERROR_INVALID_PARAMETER;
+-        }
+-    }
+-
+-    uint8_t *temp_datakey = NULL;
+-
+-    temp_datakey = (uint8_t *)malloc(plaintext->datalen);
++    uint8_t *temp_datakey = (uint8_t *)malloc(plaintext->datalen);
+     if (temp_datakey == NULL)
+         return SGX_ERROR_OUT_OF_MEMORY;
+ 
+@@ -804,10 +774,10 @@ sgx_status_t enclave_generate_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
+     case EH_AES_GCM_128:
+     case EH_AES_GCM_192:
+     case EH_AES_GCM_256:
+-        ret = ehsm_aes_gcm_encrypt(aad,
+-                                   cmk,
+-                                   plaintext,
+-                                   ciphertext);
++        ret = ehsm_aes_gcm_encrypt_impl(aad,
++                                        cmk,
++                                        plaintext,
++                                        ciphertext);
+         break;
+     case EH_SM4_CBC:
+         ret = ehsm_sm4_cbc_encrypt(cmk,
+@@ -829,6 +799,51 @@ out:
+     return ret;
+ }
+ 
++sgx_status_t enclave_generate_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
++                                      ehsm_data_t *aad, size_t aad_size,
++                                      ehsm_data_t *plaintext, size_t plaintext_size,
++                                      ehsm_data_t *ciphertext, size_t ciphertext_size)
 +{
 +    sgx_status_t ret = SGX_ERROR_UNEXPECTED;
-+    uint8_t *temp_datakey = (uint8_t *)malloc(plaintext->datalen);
-+    if (temp_datakey == NULL)
-+        return SGX_ERROR_OUT_OF_MEMORY;
 +
-+    if (sgx_read_rand(temp_datakey, plaintext->datalen) != SGX_SUCCESS)
-+    {
-+        ret = SGX_ERROR_OUT_OF_MEMORY;
-+        goto out;
-+    }
++    if (cmk == NULL ||
++        cmk_size != APPEND_SIZE_TO_KEYBLOB_T(cmk->keybloblen) ||
++        cmk->keybloblen == 0 ||
++        cmk->metadata.origin != EH_INTERNAL_KEY ||
++        cmk->metadata.keyusage != EH_KEYUSAGE_ENCRYPT_DECRYPT)
++        return SGX_ERROR_INVALID_PARAMETER;
 +
-+    if (memcpy_s(plaintext->data, plaintext->datalen, temp_datakey, plaintext->datalen))
-+    {
-+        ret = SGX_ERROR_OUT_OF_MEMORY;
-+        goto out;
-+    }
++    if (plaintext == NULL ||
++        plaintext_size != APPEND_SIZE_TO_DATA_T(plaintext->datalen) ||
++        plaintext->datalen > 1024 ||
++        plaintext->datalen == 0)
++        return SGX_ERROR_INVALID_PARAMETER;
++
++    if (aad != NULL && aad_size != APPEND_SIZE_TO_DATA_T(aad->datalen))
++        return SGX_ERROR_INVALID_PARAMETER;
++
++    if (aad == NULL && aad_size != 0)
++        return SGX_ERROR_INVALID_PARAMETER;
++
++    if (ciphertext == NULL ||
++        ciphertext_size != APPEND_SIZE_TO_DATA_T(ciphertext->datalen))
++        return SGX_ERROR_INVALID_PARAMETER;
 +
 +    switch (cmk->metadata.keyspec)
 +    {
 +    case EH_AES_GCM_128:
 +    case EH_AES_GCM_192:
 +    case EH_AES_GCM_256:
-+        ret = ehsm_aes_gcm_encrypt_impl(aad,
-+                                        cmk,
-+                                        plaintext,
-+                                        ciphertext);
-+        break;
-+    case EH_SM4_CBC:
-+        ret = ehsm_sm4_cbc_encrypt(cmk,
-+                                   plaintext,
-+                                   ciphertext);
-+        break;
-+    case EH_SM4_CTR:
-+        ret = ehsm_sm4_ctr_encrypt(cmk,
-+                                   plaintext,
-+                                   ciphertext);
++        if (ciphertext->datalen < plaintext->datalen + SGX_AESGCM_IV_SIZE + SGX_AESGCM_MAC_SIZE)
++            return SGX_ERROR_INVALID_PARAMETER;
 +        break;
 +    default:
-+        break;
++        return SGX_ERROR_INVALID_PARAMETER;
 +    }
 +
-+out:
-+    memset_s(temp_datakey, plaintext->datalen, 0, plaintext->datalen);
-+    free(temp_datakey);
-+    return ret;
++    return ehsm_generate_datakey(cmk, aad, plaintext, ciphertext);
 +}
 +
- sgx_status_t enclave_generate_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
-                                       ehsm_data_t *aad, size_t aad_size,
-                                       ehsm_data_t *plaintext, size_t plaintext_size,
-@@ -781,52 +857,7 @@ sgx_status_t enclave_generate_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
-         }
-     }
- 
--    uint8_t *temp_datakey = NULL;
--
--    temp_datakey = (uint8_t *)malloc(plaintext->datalen);
--    if (temp_datakey == NULL)
--        return SGX_ERROR_OUT_OF_MEMORY;
--
--    if (sgx_read_rand(temp_datakey, plaintext->datalen) != SGX_SUCCESS)
--    {
--        ret = SGX_ERROR_OUT_OF_MEMORY;
--        goto out;
--    }
--
--    if (memcpy_s(plaintext->data, plaintext->datalen, temp_datakey, plaintext->datalen))
--    {
--        ret = SGX_ERROR_OUT_OF_MEMORY;
--        goto out;
--    }
--
--    switch (cmk->metadata.keyspec)
--    {
--    case EH_AES_GCM_128:
--    case EH_AES_GCM_192:
--    case EH_AES_GCM_256:
--        ret = ehsm_aes_gcm_encrypt(aad,
--                                   cmk,
--                                   plaintext,
--                                   ciphertext);
--        break;
--    case EH_SM4_CBC:
--        ret = ehsm_sm4_cbc_encrypt(cmk,
--                                   plaintext,
--                                   ciphertext);
--        break;
--    case EH_SM4_CTR:
--        ret = ehsm_sm4_ctr_encrypt(cmk,
--                                   plaintext,
--                                   ciphertext);
--        break;
--    default:
--        break;
--    }
--
--out:
--    memset_s(temp_datakey, plaintext->datalen, 0, plaintext->datalen);
--    free(temp_datakey);
--    return ret;
-+    return ehsm_generate_datakey(cmk, aad, plaintext, ciphertext);
- }
- 
  sgx_status_t enclave_export_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
+                                     ehsm_data_t *aad, size_t aad_size,
+                                     ehsm_data_t *olddatakey, size_t olddatakey_size,
 diff --git a/core/Enclave/key_factory.cpp b/core/Enclave/key_factory.cpp
 index 57e7d99..2028349 100644
 --- a/core/Enclave/key_factory.cpp
