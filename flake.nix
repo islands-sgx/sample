@@ -3,8 +3,8 @@
   inputs.llvm-project.url = "github:islands-sgx/llvm-llvmProject/generic-anchor";
   inputs.llvm-project.flake = false;
 
-  inputs.urts-readiness = {
-    url = "path:/home/meandssh/islands-sgx/implement/host/urts";
+  inputs.implement = {
+    url = "github:islands-sgx/implement";
     flake = false;
   };
 
@@ -18,10 +18,10 @@
       toolchain = import ./flake/toolchains.nix {
         inherit pkgs llvmPackages;
         llvmProject = inputs."llvm-project";
+        implementSrc = inputs.implement;
       };
       sgx = import ./flake/sgx.nix {
         inherit pkgs llvmPackages toolchain;
-        readinessSource = inputs.urts-readiness;
       };
       libraries = import ./flake/libraries.nix {
         inherit pkgs toolchain sgx;
@@ -123,7 +123,11 @@
             ATFIELD_SAMPLE_SHELL = "${group}/${name}/${mode}";
             LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibraries;
             SGX_ARCH = "x64";
-            SGX_ENCLAVE_CLANG = "${toolchain.enclaveCompiler}/bin/enclave-clang-ir-consistent";
+            SGX_ENCLAVE_CLANG =
+              if mode == "protect" then
+                "${toolchain.implementBundle}/cli/enclave-clang"
+              else
+                "${toolchain.enclaveCompiler}/bin/enclave-clang-ir-consistent";
             SGX_MODE = "HW";
             SGX_PSW_ROOT = "${sampleSgx.psw}";
             SGX_SDK_ROOT = "${sampleSgx.sdk}";
@@ -141,6 +145,10 @@
           // lib.optionalAttrs (group == "real" && name == "sgxwallet") {
             SGX_GMP_ROOT = "${real.libraries.gmp.${libraryMode}}";
             SGX_MCL_ROOT = "${real.libraries.mcl.${libraryMode}}";
+          }
+          // lib.optionalAttrs (mode == "protect") {
+            ATFIELD_FIELD_TOOL = "${toolchain.atfieldField}/bin/atfield-field";
+            ATFIELD_IMPLEMENT_ROOT = "${toolchain.implementBundle}";
           }
           // lib.optionalAttrs (group == "real") upstreamEnv.${name};
         };

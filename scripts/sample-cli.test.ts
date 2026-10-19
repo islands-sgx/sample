@@ -44,7 +44,7 @@ function reject(script: string, args: string[], pattern: RegExp) {
 
 test("shared CLI rejects invalid selectors before entering Nix", () => {
   reject("build-sample.sh", ["bench", "sqlite", "raw"], /GROUP must be anchor or real/);
-  reject("build-sample.sh", ["anchor", "sqlite", "bench"], /MODE must be raw or anchor/);
+  reject("build-sample.sh", ["anchor", "sqlite", "bench"], /MODE must be raw, anchor, or protect/);
   reject("build-sample.sh", ["anchor", "../sqlite", "raw"], /NAME must use lower-case words/);
   reject("run-sample.sh", ["anchor", "not/a/sample", "raw"], /NAME must use lower-case words/);
   reject("run-sample.sh", ["anchor", "missing", "raw"], /unknown anchor sample: missing/);

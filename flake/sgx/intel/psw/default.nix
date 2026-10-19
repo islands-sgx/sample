@@ -16,7 +16,6 @@
   ocamlPackages,
   which,
   debug ? false,
-  readinessPatch ? null,
 }:
 stdenv.mkDerivation (rec {
   pname = "sgx-psw";
@@ -25,10 +24,10 @@ stdenv.mkDerivation (rec {
   # Version as used in the Git tag
   versionTag = "2.29";
   src = fetchFromGitHub {
-    owner = "ATField-SGX";
+    owner = "islands-sgx";
     repo = "intel-confidentialComputing_sgx";
-    rev = "29787a0de92e8d54d3fe71510e02020b26a3e42b";
-    hash = "sha256-y61Gjzr68WIs28c2HUBcc4zMLBVHyNMZ0qArGW2Akdg=";
+    rev = "e36f39f7fdf101560e46141ac0a68baead2fc7cb";
+    hash = "sha256-/otbCTIV+q3vHj/fSoR5ipsXrYpHcNbIIPaejqv6Mr8=";
     fetchSubmodules = true;
   };
 
@@ -282,6 +281,4 @@ stdenv.mkDerivation (rec {
     platforms = [ "x86_64-linux" ];
     license = [ lib.licenses.bsd3 ];
   };
-} // lib.optionalAttrs (readinessPatch != null) {
-  patches = [ readinessPatch ];
 })

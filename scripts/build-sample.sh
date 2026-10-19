@@ -14,13 +14,15 @@ export ATFIELD_SOURCE_ROOT="$source_root"
 if [[ $mode == protect ]]; then
   export ATFIELD_IMPLEMENT_ROOT="$implement_root"
   export ATFIELD_FIELD_BOUNDARY=1
-  field_builder="$implement_root/cli/build-field"
-  if [[ ! -x $field_builder ]]; then
-    echo "implement Field builder is missing: $field_builder" >&2
-    exit 66
+  export ATFIELD_FIELD_TOOL=${ATFIELD_FIELD_TOOL:-$implement_root/build/field/.build-host/atfield-field}
+  if [[ ! -x $ATFIELD_FIELD_TOOL ]]; then
+    field_builder="$implement_root/cli/build-field"
+    if [[ ! -x $field_builder ]]; then
+      echo "implement Field builder is missing: $field_builder" >&2
+      exit 66
+    fi
+    "$field_builder"
   fi
-  "$field_builder"
-  export ATFIELD_FIELD_TOOL="$implement_root/build/field/.build-host/atfield-field"
   if [[ ! -x $ATFIELD_FIELD_TOOL ]]; then
     echo "implement Field tool is missing: $ATFIELD_FIELD_TOOL" >&2
     exit 66

@@ -25,17 +25,16 @@
   writeShellScript,
   writeText,
   debug ? false,
-  readinessPatch ? null,
 }:
 stdenv.mkDerivation (rec {
   pname = "sgx-sdk";
   # Version as given in se_version.h.
   version = "2.29.100.1";
   src = fetchFromGitHub {
-    owner = "ATField-SGX";
+    owner = "islands-sgx";
     repo = "intel-confidentialComputing_sgx";
-    rev = "7798c1b234ad1a7b2fd85be17d60fec6908f13a0";
-    hash = "sha256-blWXtALXtpWlqVw5cg27M2jVy1qSIqzSi4LF0XVaOlM=";
+    rev = "e36f39f7fdf101560e46141ac0a68baead2fc7cb";
+    hash = "sha256-/otbCTIV+q3vHj/fSoR5ipsXrYpHcNbIIPaejqv6Mr8=";
     fetchSubmodules = true;
   };
 
@@ -361,6 +360,4 @@ stdenv.mkDerivation (rec {
     platforms = [ "x86_64-linux" ];
     license = [ lib.licenses.bsd3 ];
   };
-} // lib.optionalAttrs (readinessPatch != null) {
-  patches = [ readinessPatch ];
 })

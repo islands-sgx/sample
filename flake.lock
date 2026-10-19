@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "implement": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792394266,
+        "narHash": "sha256-o+0SDgWQRYuzn2ctcpRXZwflFKB6yIUNPLOhkRILd3s=",
+        "owner": "islands-sgx",
+        "repo": "implement",
+        "rev": "a3cf16bce12267c4323cabe2b571fdae9a203b01",
+        "type": "github"
+      },
+      "original": {
+        "owner": "islands-sgx",
+        "repo": "implement",
+        "type": "github"
+      }
+    },
     "llvm-project": {
       "flake": false,
       "locked": {
@@ -35,21 +51,9 @@
     },
     "root": {
       "inputs": {
+        "implement": "implement",
         "llvm-project": "llvm-project",
-        "nixpkgs": "nixpkgs",
-        "urts-readiness": "urts-readiness"
-      }
-    },
-    "urts-readiness": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-01AZvMpUNBENgxAkC7eXdVZYNfNAKGnQ0aeSGDwIx/0=",
-        "path": "/home/meandssh/islands-sgx/implement/host/urts",
-        "type": "path"
-      },
-      "original": {
-        "path": "/home/meandssh/islands-sgx/implement/host/urts",
-        "type": "path"
+        "nixpkgs": "nixpkgs"
       }
     }
   },

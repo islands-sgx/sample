@@ -18,7 +18,6 @@ run_args=("$@")
 if [[ $mode == protect ]]; then
   host_runner_mode=${ATFIELD_HOST_RUNNER:-on}
   readiness_backend=${ATFIELD_READINESS_BACKEND:-kernel}
-  runner_path="$implement_root/host/runner/atfield-run"
   case $host_runner_mode in
     on|off) ;;
     *) echo "ATFIELD_HOST_RUNNER must be 'on' or 'off'" >&2; exit 64 ;;
@@ -32,18 +31,6 @@ if [[ $mode == protect ]]; then
     exit 64
   fi
   export ATFIELD_READINESS_BACKEND="$readiness_backend"
-  if [[ $host_runner_mode == on ]]; then
-    if [[ ! -x $runner_path ]]; then
-      echo "protect host runner is missing or not executable: $runner_path" >&2
-      exit 66
-    fi
-    if ! command -v sudo >/dev/null 2>&1; then
-      echo "sudo is required to launch protect hosts through atfield-run" >&2
-      exit 69
-    fi
-  elif [[ ${ATFIELD_SAMPLE_SHELL:-} == "$sample_marker" ]]; then
-    echo "RESEARCH ONLY: host CPU lease is bypassed; userspace-readiness is selected explicitly" >&2
-  fi
 fi
 
 if [[ $group == anchor && ${#run_args[@]} -ne 0 ]]; then
@@ -53,6 +40,22 @@ fi
 
 rm -f "$build_dir/run.json"
 sample_enter_shell "$0" "${original_args[@]}"
+
+if [[ $mode == protect ]]; then
+  runner_path="$implement_root/host/runner/atfield-run"
+  if [[ $host_runner_mode == on ]]; then
+    if [[ ! -x $runner_path ]]; then
+      echo "protect host runner is missing or not executable: $runner_path" >&2
+      exit 66
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+      echo "sudo is required to launch protect hosts through atfield-run" >&2
+      exit 69
+    fi
+  else
+    echo "RESEARCH ONLY: host CPU lease is bypassed; userspace-readiness is selected explicitly" >&2
+  fi
+fi
 
 bash "$project_root/scripts/build-sample.sh" "$group" "$name" "$mode"
 
