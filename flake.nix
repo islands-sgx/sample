@@ -4,7 +4,7 @@
   inputs.llvm-project.flake = false;
 
   inputs.implement = {
-    url = "github:islands-sgx/implement";
+    url = "git+ssh://git@github.com/islands-sgx/implement";
     flake = false;
   };
 

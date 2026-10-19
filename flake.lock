@@ -3,17 +3,17 @@
     "implement": {
       "flake": false,
       "locked": {
-        "lastModified": 1792394266,
-        "narHash": "sha256-o+0SDgWQRYuzn2ctcpRXZwflFKB6yIUNPLOhkRILd3s=",
-        "owner": "islands-sgx",
-        "repo": "implement",
-        "rev": "a3cf16bce12267c4323cabe2b571fdae9a203b01",
-        "type": "github"
+        "lastModified": 1792401825,
+        "narHash": "sha256-TIPyMFSl0Bd9b+50XiuSlIS3VNgE51brOPg9u6qV/lQ=",
+        "ref": "fix/host-isolation-readback",
+        "rev": "a6aa52dbedf8a2cee3ddca7d94b8abb0210bed1f",
+        "revCount": 4,
+        "type": "git",
+        "url": "ssh://git@github.com/islands-sgx/implement"
       },
       "original": {
-        "owner": "islands-sgx",
-        "repo": "implement",
-        "type": "github"
+        "type": "git",
+        "url": "ssh://git@github.com/islands-sgx/implement"
       }
     },
     "llvm-project": {
