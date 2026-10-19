@@ -18,6 +18,10 @@
 #include <string>
 #include <string.h>
 
+#ifdef ATFIELD_PROTECT
+#include "../../common/atfield_readiness_host.h"
+#endif
+
 #include "secure_enclave_u.h"
 
 #ifndef ENCLAVE_PATH
@@ -73,6 +77,13 @@ class Enclave {
                          static_cast<unsigned int>(status));
             throw Failure{};
         }
+#ifdef ATFIELD_PROTECT
+        if (!atfield_host_install_readiness(id_)) {
+            (void)sgx_destroy_enclave(id_);
+            id_ = 0;
+            throw Failure{};
+        }
+#endif
     }
 
     Enclave(const Enclave &) = delete;

@@ -36,7 +36,20 @@
     "root": {
       "inputs": {
         "llvm-project": "llvm-project",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "urts-readiness": "urts-readiness"
+      }
+    },
+    "urts-readiness": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-01AZvMpUNBENgxAkC7eXdVZYNfNAKGnQ0aeSGDwIx/0=",
+        "path": "/home/meandssh/islands-sgx/implement/host/urts",
+        "type": "path"
+      },
+      "original": {
+        "path": "/home/meandssh/islands-sgx/implement/host/urts",
+        "type": "path"
       }
     }
   },

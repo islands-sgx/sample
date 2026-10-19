@@ -141,7 +141,8 @@ function(sgx_find_sdk)
 endfunction()
 
 function(sgx_add_sample)
-  set(one_value_args NAME EDL CONFIG PROFILE OPTIMIZATION)
+  set(one_value_args NAME EDL CONFIG PROFILE OPTIMIZATION
+      PROTECT_HEAP PROTECT_STACK PROTECT_Q)
   set(multi_value_args SOURCES HOST_SOURCES INCLUDE_DIRECTORIES SEARCH_PATHS
       TRUSTED_LIBRARIES HOST_INCLUDE_DIRECTORIES HOST_LIBRARIES
       ENCLAVE_COMPILE_OPTIONS)
@@ -180,6 +181,42 @@ function(sgx_add_sample)
     endif()
   endforeach()
 
+  if(ATFIELD_MODE STREQUAL protect)
+    if(NOT ATFIELD_IMPLEMENT_ROOT OR
+       NOT EXISTS "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.py")
+      message(FATAL_ERROR "protect requires the implement repository tools")
+    endif()
+    if(NOT ARG_PROTECT_HEAP OR NOT ARG_PROTECT_STACK OR NOT ARG_PROTECT_Q)
+      message(FATAL_ERROR "protect requires PROTECT_HEAP, PROTECT_STACK, and PROTECT_Q")
+    endif()
+    if(NOT ATFIELD_FIELD_TOOL OR NOT IS_EXECUTABLE "${ATFIELD_FIELD_TOOL}")
+      message(FATAL_ERROR "protect requires a built ATFIELD_FIELD_TOOL")
+    endif()
+    math(EXPR protect_q "${ARG_PROTECT_Q}")
+    math(EXPR protect_q_remainder "${protect_q} % 4096")
+    if(protect_q LESS_EQUAL 0 OR NOT protect_q_remainder EQUAL 0)
+      message(FATAL_ERROR "protect Q must be positive and page aligned")
+    endif()
+    set(selector_path "${CMAKE_CURRENT_SOURCE_DIR}/selectors.json")
+    if(NOT EXISTS "${selector_path}")
+      message(FATAL_ERROR "protect requires ${selector_path}")
+    endif()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(original_config "${CONFIG_PATH}")
+    set(CONFIG_PATH "${CMAKE_BINARY_DIR}/Enclave.protect.config.xml")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+      "${original_config}" "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.py")
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}"
+        "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.py"
+        "${original_config}" "${CONFIG_PATH}"
+        --heap "${ARG_PROTECT_HEAP}" --stack "${ARG_PROTECT_STACK}"
+      RESULT_VARIABLE config_result)
+    if(NOT config_result EQUAL 0)
+      message(FATAL_ERROR "failed to derive protect signing config")
+    endif()
+  endif()
+
   get_filename_component(edl_directory "${EDL_PATH}" DIRECTORY)
   get_filename_component(edl_name "${EDL_PATH}" NAME_WE)
   set(search_paths "${edl_directory}" "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -210,19 +247,27 @@ function(sgx_add_sample)
     COMMENT "[SGX] edger8r trusted bridge for ${edl_name}"
     VERBATIM)
 
-  if(ATFIELD_MODE STREQUAL anchor)
-    set(anchor_preparation 1)
-  else()
+  if(ATFIELD_MODE STREQUAL raw)
     set(anchor_preparation 0)
+    set(field_boundary 0)
+  elseif(ATFIELD_MODE STREQUAL anchor)
+    set(anchor_preparation 1)
+    set(field_boundary 0)
+  else()
+    set(anchor_preparation 1)
+    set(field_boundary 1)
   endif()
   set(codegen_launcher
       "${CMAKE_COMMAND}" -E env
       "ATFIELD_ANCHOR_PREPARATION=${anchor_preparation}"
+      "ATFIELD_FIELD_BOUNDARY=${field_boundary}"
+      "ATFIELD_IMPLEMENT_ROOT=${ATFIELD_IMPLEMENT_ROOT}"
       "ATFIELD_PAYLOAD_NAMESPACE=${ATFIELD_GROUP}/${ATFIELD_SAMPLE}"
       "ATFIELD_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
       "ATFIELD_LLC=${ATFIELD_LLC}"
       "ATFIELD_UPSTREAM_SOURCE_ROOT=${ATFIELD_UPSTREAM_SOURCE_ROOT}"
       "ATFIELD_UPSTREAM_PACKAGE=${ATFIELD_UPSTREAM_PACKAGE}"
+      "ATFIELD_FIELD_TOOL=${ATFIELD_FIELD_TOOL}"
       "${SGX_ENCLAVE_CLANG}" --cmake-launcher)
 
   foreach(library_name trts tstdc tcxx tcrypto tservice)
@@ -240,6 +285,30 @@ function(sgx_add_sample)
     LINK_DEPENDS "${CMAKE_SOURCE_DIR}/cmake/Enclave.lds"
     C_COMPILER_LAUNCHER "${codegen_launcher}"
     CXX_COMPILER_LAUNCHER "${codegen_launcher}")
+  if(ATFIELD_MODE STREQUAL protect)
+    set_target_properties(${enclave_target} PROPERTIES OUTPUT_NAME enclave.profile)
+    set(profile_link_launcher
+      "${Python3_EXECUTABLE}" "${ATFIELD_IMPLEMENT_ROOT}/cli/profile-link.py"
+      --field-tool "${ATFIELD_FIELD_TOOL}"
+      --pretouch-tool "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py"
+      --capacity-q "${protect_q}"
+      --assembler "${CMAKE_C_COMPILER}"
+      --linker-script "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/post-rx-segment.ld"
+      --)
+    set_target_properties(${enclave_target} PROPERTIES
+      C_LINKER_LAUNCHER "${profile_link_launcher}"
+      CXX_LINKER_LAUNCHER "${profile_link_launcher}")
+    set_property(TARGET ${enclave_target} APPEND PROPERTY LINK_DEPENDS
+      "${ATFIELD_FIELD_TOOL}"
+      "${ATFIELD_IMPLEMENT_ROOT}/cli/profile-link.py"
+      "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py"
+      "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/post-rx-segment.ld")
+    # The link launcher writes this manifest before the target's post-build step.
+    # Declare the side effect so Ninja can order the signed-layout pipeline.
+    add_custom_command(TARGET ${enclave_target} POST_BUILD
+      BYPRODUCTS "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/fields.json"
+      COMMAND "${CMAKE_COMMAND}" -E true)
+  endif()
   target_include_directories(${enclave_target} PRIVATE
     "${SGX_SDK_INCLUDE_DIRECTORY}"
     "${SGX_SDK_INCLUDE_DIRECTORY}/tlibc"
@@ -289,18 +358,100 @@ function(sgx_add_sample)
     COMMENT "[SGX] ensuring test signing key ${key_path}"
     VERBATIM)
   set(signed_file "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/enclave.signed.so")
-  add_custom_command(
-    OUTPUT "${signed_file}"
-    COMMAND "${SGX_SDK_SIGN}" sign -key "${key_path}"
-            -enclave "$<TARGET_FILE:${enclave_target}>"
-            -out "${signed_file}" -config "${CONFIG_PATH}"
-    # The analysis ELF keeps all symbols; the signed publication keeps SGX metadata.
-    COMMAND "${CMAKE_OBJCOPY}" --strip-all --keep-section=.note.sgxmeta
-            "${signed_file}"
-    DEPENDS ${enclave_target} "${key_path}" "${CONFIG_PATH}"
-    COMMENT "[SGX] signing enclave ${signed_file}"
-    VERBATIM)
-  add_custom_target(${enclave_target}_signed ALL DEPENDS "${signed_file}")
+  if(ATFIELD_MODE STREQUAL protect)
+    set(protect_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    set(fields_file "${protect_directory}/fields.json")
+    set(profile_signed "${protect_directory}/enclave.profile.signed.so")
+    set(workset_file "${protect_directory}/workset.json")
+    set(final_file "${protect_directory}/enclave.so")
+    set(final_signed_unstripped "${protect_directory}/enclave.final.signed.unstripped.so")
+    set(finalized_file "${protect_directory}/pretouch-finalized.json")
+    set(verified_file "${protect_directory}/pretouch-verified.json")
+    set(ready_file "${protect_directory}/ready.bin")
+    set(ready_summary "${protect_directory}/ready.json")
+    add_custom_command(
+      OUTPUT "${profile_signed}"
+      COMMAND "${SGX_SDK_SIGN}" sign -key "${key_path}"
+              -enclave "$<TARGET_FILE:${enclave_target}>"
+              -out "${profile_signed}" -config "${CONFIG_PATH}"
+      DEPENDS ${enclave_target} "${key_path}" "${CONFIG_PATH}"
+      COMMENT "[SGX] sign Profile with the final enclave layout"
+      VERBATIM)
+    add_custom_command(
+      OUTPUT "${workset_file}"
+      COMMAND "${Python3_EXECUTABLE}"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.py"
+              --profile-elf "$<TARGET_FILE:${enclave_target}>"
+              --signed-elf "${profile_signed}"
+              --fields "${fields_file}" --capacity-q "${protect_q}"
+              --selectors "${selector_path}" --edl "${EDL_PATH}"
+              --out "${workset_file}"
+      DEPENDS "${profile_signed}" "${fields_file}" "${selector_path}" "${EDL_PATH}"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.py"
+      COMMENT "[SGX] derive committed REG pages from signed Profile"
+      VERBATIM)
+    add_custom_command(
+      OUTPUT "${final_file}" "${finalized_file}"
+      COMMAND "${Python3_EXECUTABLE}"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py" finalize
+              --profile-elf "$<TARGET_FILE:${enclave_target}>"
+              --signed-profile-elf "${profile_signed}"
+              --workset "${workset_file}" --fields "${fields_file}"
+              --capacity-q "${protect_q}"
+              --out-elf "${final_file}" --out-json "${finalized_file}"
+      DEPENDS "${workset_file}"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py"
+      COMMENT "[SGX] fill the fixed Profile RX reservation"
+      VERBATIM)
+    add_custom_command(
+      OUTPUT "${final_signed_unstripped}"
+      COMMAND "${SGX_SDK_SIGN}" sign -key "${key_path}"
+              -enclave "${final_file}"
+              -out "${final_signed_unstripped}" -config "${CONFIG_PATH}"
+      DEPENDS "${final_file}" "${key_path}" "${CONFIG_PATH}"
+      COMMENT "[SGX] sign Final enclave"
+      VERBATIM)
+    add_custom_command(
+      OUTPUT "${signed_file}"
+      COMMAND "${CMAKE_OBJCOPY}" --strip-all --keep-section=.note.sgxmeta
+              "${final_signed_unstripped}" "${signed_file}"
+      DEPENDS "${final_signed_unstripped}"
+      COMMENT "[SGX] publish stripped signed Final enclave"
+      VERBATIM)
+    add_custom_command(
+      OUTPUT "${ready_file}" "${ready_summary}" "${verified_file}"
+      COMMAND "${Python3_EXECUTABLE}"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py" verify
+              --profile-elf "$<TARGET_FILE:${enclave_target}>"
+              --signed-profile-elf "${profile_signed}"
+              --final-elf "${final_file}" --signed-final-elf "${signed_file}"
+              --workset "${workset_file}" --fields "${fields_file}"
+              --capacity-q "${protect_q}" --out-json "${verified_file}"
+      COMMAND "${Python3_EXECUTABLE}"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/readiness/readiness.py"
+              --workset "${workset_file}" --fields "${fields_file}"
+              --pretouch "${verified_file}"
+              --final-elf "${final_file}" --signed-final-elf "${signed_file}"
+              --out "${ready_file}" --out-json "${ready_summary}"
+      DEPENDS "${signed_file}" "${workset_file}"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/readiness/readiness.py"
+      COMMENT "[SGX] verify Final and emit ECALL page-readiness table"
+      VERBATIM)
+    add_custom_target(${enclave_target}_signed ALL DEPENDS "${ready_file}")
+  else()
+    add_custom_command(
+      OUTPUT "${signed_file}"
+      COMMAND "${SGX_SDK_SIGN}" sign -key "${key_path}"
+              -enclave "$<TARGET_FILE:${enclave_target}>"
+              -out "${signed_file}" -config "${CONFIG_PATH}"
+      COMMAND "${CMAKE_OBJCOPY}" --strip-all --keep-section=.note.sgxmeta
+              "${signed_file}"
+      DEPENDS ${enclave_target} "${key_path}" "${CONFIG_PATH}"
+      COMMENT "[SGX] signing enclave ${signed_file}"
+      VERBATIM)
+    add_custom_target(${enclave_target}_signed ALL DEPENDS "${signed_file}")
+  endif()
 
   find_library(sgx_urts_library
     NAMES sgx_urts
@@ -318,6 +469,15 @@ function(sgx_add_sample)
     ${host_definitions})
   target_compile_definitions(host PRIVATE
     "ENCLAVE_PATH=\"${signed_file}\"")
+  if(ATFIELD_MODE STREQUAL protect)
+    target_sources(host PRIVATE
+      "${ATFIELD_IMPLEMENT_ROOT}/host/urts/atfield_readiness.cpp")
+    target_include_directories(host PRIVATE
+      "${ATFIELD_IMPLEMENT_ROOT}/host/urts")
+    target_compile_definitions(host PRIVATE
+      ATFIELD_PROTECT=1
+      "ATFIELD_READY_PATH=\"${ready_file}\"")
+  endif()
   target_link_libraries(host PRIVATE
     ${ARG_HOST_LIBRARIES} "${sgx_urts_library}" pthread)
   set_target_properties(host PROPERTIES

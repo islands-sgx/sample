@@ -1,5 +1,9 @@
 #include <sgx_urts.h>
 
+#ifdef ATFIELD_PROTECT
+#include "../../common/atfield_readiness_host.h"
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +37,13 @@ int main(void)
                 (unsigned int)status);
         return 1;
     }
+
+#ifdef ATFIELD_PROTECT
+    if (!atfield_host_install_readiness(enclave_id)) {
+        (void)sgx_destroy_enclave(enclave_id);
+        return 1;
+    }
+#endif
 
     uint8_t key_id[32];
     uint8_t different_key_id[32];

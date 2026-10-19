@@ -11,6 +11,26 @@ sample_setup "$1" "$2" "$3"
 sample_enter_shell "$0" "$@"
 
 export ATFIELD_SOURCE_ROOT="$source_root"
+if [[ $mode == protect ]]; then
+  export ATFIELD_IMPLEMENT_ROOT="$implement_root"
+  export ATFIELD_FIELD_BOUNDARY=1
+  field_builder="$implement_root/cli/build-field"
+  if [[ ! -x $field_builder ]]; then
+    echo "implement Field builder is missing: $field_builder" >&2
+    exit 66
+  fi
+  "$field_builder"
+  export ATFIELD_FIELD_TOOL="$implement_root/build/field/.build-host/atfield-field"
+  if [[ ! -x $ATFIELD_FIELD_TOOL ]]; then
+    echo "implement Field tool is missing: $ATFIELD_FIELD_TOOL" >&2
+    exit 66
+  fi
+  SGX_ENCLAVE_CLANG="$implement_root/cli/enclave-clang"
+  if [[ ! -x $SGX_ENCLAVE_CLANG ]]; then
+    echo "implement enclave compiler is missing: $SGX_ENCLAVE_CLANG" >&2
+    exit 66
+  fi
+fi
 
 cmake_args=()
 for variable in CURVE25519_DONNA_SGX_ROOT YESCRYPT_SGX_ROOT \
@@ -21,6 +41,9 @@ for variable in CURVE25519_DONNA_SGX_ROOT YESCRYPT_SGX_ROOT \
     cmake_args+=("-D${variable}=${!variable}")
   fi
 done
+if [[ $mode == protect ]]; then
+  cmake_args+=("-DATFIELD_FIELD_TOOL=$ATFIELD_FIELD_TOOL")
+fi
 
 if [[ -f "$build_dir/CMakeCache.txt" ]] &&
    ! grep -Fxq "CMAKE_C_COMPILER:FILEPATH=$ATFIELD_CC" "$build_dir/CMakeCache.txt"; then
@@ -46,6 +69,7 @@ cmake -S "$project_root" -B "$build_dir" -G Ninja \
   -DATFIELD_GROUP="$group" \
   -DATFIELD_SAMPLE="$name" \
   -DATFIELD_MODE="$mode" \
+  -DATFIELD_IMPLEMENT_ROOT="${ATFIELD_IMPLEMENT_ROOT:-}" \
   -DATFIELD_LLC="$ATFIELD_LLC" \
   -DATFIELD_UPSTREAM_SOURCE_ROOT="${ATFIELD_UPSTREAM_SOURCE_ROOT:-}" \
   -DATFIELD_UPSTREAM_PACKAGE="${ATFIELD_UPSTREAM_PACKAGE:-}" \

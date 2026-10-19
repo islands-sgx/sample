@@ -10,6 +10,9 @@ sgx_add_sample(
   NAME ehsm
   EDL "${CMAKE_CURRENT_SOURCE_DIR}/enclave_hsm.edl"
   CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/Enclave.config.xml"
+  PROTECT_HEAP 0x400000
+  PROTECT_STACK 0x40000
+  PROTECT_Q 0x15000
   SOURCES
     "${_EHSM_SOURCE_DIRECTORY}/enclave_hsm.cpp"
     "${_EHSM_SOURCE_DIRECTORY}/key_factory.cpp"

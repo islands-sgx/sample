@@ -16,8 +16,9 @@
   ocamlPackages,
   which,
   debug ? false,
+  readinessPatch ? null,
 }:
-stdenv.mkDerivation rec {
+stdenv.mkDerivation (rec {
   pname = "sgx-psw";
   # Version as given in se_version.h
   version = "2.29.100.1";
@@ -30,6 +31,7 @@ stdenv.mkDerivation rec {
     hash = "sha256-y61Gjzr68WIs28c2HUBcc4zMLBVHyNMZ0qArGW2Akdg=";
     fetchSubmodules = true;
   };
+
 
   # Extract Intel-provided, pre-built enclaves and libs.
   postUnpack =
@@ -280,4 +282,6 @@ stdenv.mkDerivation rec {
     platforms = [ "x86_64-linux" ];
     license = [ lib.licenses.bsd3 ];
   };
-}
+} // lib.optionalAttrs (readinessPatch != null) {
+  patches = [ readinessPatch ];
+})

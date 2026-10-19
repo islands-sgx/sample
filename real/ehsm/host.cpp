@@ -17,6 +17,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#ifdef ATFIELD_PROTECT
+#include "../../common/atfield_readiness_host.h"
+#endif
+
 #include "datatypes.h"
 #include "enclave_hsm_u.h"
 #include "sgxssl_cpu_profile.h"
@@ -158,6 +162,13 @@ class Enclave {
                          static_cast<unsigned int>(status));
             throw Failure{};
         }
+#ifdef ATFIELD_PROTECT
+        if (!atfield_host_install_readiness(id_)) {
+            (void)sgx_destroy_enclave(id_);
+            id_ = 0;
+            throw Failure{};
+        }
+#endif
     }
 
     ~Enclave()

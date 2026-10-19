@@ -1,5 +1,9 @@
 #include <sgx_urts.h>
 
+#ifdef ATFIELD_PROTECT
+#include "../../common/atfield_readiness_host.h"
+#endif
+
 #include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -244,6 +248,13 @@ int main(int argc, char **argv)
                 (unsigned int)status);
         return 1;
     }
+
+#ifdef ATFIELD_PROTECT
+    if (!atfield_host_install_readiness(enclave_id)) {
+        (void)sgx_destroy_enclave(enclave_id);
+        return 1;
+    }
+#endif
 
     const options_t defaults = {8, 6, 2};
     int failed = check_fixed_cases(enclave_id) != 0 ||

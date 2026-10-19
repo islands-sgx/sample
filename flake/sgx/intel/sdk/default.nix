@@ -25,8 +25,9 @@
   writeShellScript,
   writeText,
   debug ? false,
+  readinessPatch ? null,
 }:
-stdenv.mkDerivation rec {
+stdenv.mkDerivation (rec {
   pname = "sgx-sdk";
   # Version as given in se_version.h.
   version = "2.29.100.1";
@@ -37,6 +38,7 @@ stdenv.mkDerivation rec {
     hash = "sha256-blWXtALXtpWlqVw5cg27M2jVy1qSIqzSi4LF0XVaOlM=";
     fetchSubmodules = true;
   };
+
 
   postPatch = ''
     patchShebangs linux/installer/bin/build-installpkg.sh \
@@ -359,4 +361,6 @@ stdenv.mkDerivation rec {
     platforms = [ "x86_64-linux" ];
     license = [ lib.licenses.bsd3 ];
   };
-}
+} // lib.optionalAttrs (readinessPatch != null) {
+  patches = [ readinessPatch ];
+})

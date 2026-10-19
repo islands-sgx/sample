@@ -3,6 +3,11 @@
   inputs.llvm-project.url = "github:islands-sgx/llvm-llvmProject/generic-anchor";
   inputs.llvm-project.flake = false;
 
+  inputs.urts-readiness = {
+    url = "path:/home/meandssh/islands-sgx/implement/host/urts";
+    flake = false;
+  };
+
   outputs =
     inputs:
     let
@@ -14,7 +19,10 @@
         inherit pkgs llvmPackages;
         llvmProject = inputs."llvm-project";
       };
-      sgx = import ./flake/sgx.nix { inherit pkgs llvmPackages toolchain; };
+      sgx = import ./flake/sgx.nix {
+        inherit pkgs llvmPackages toolchain;
+        readinessSource = inputs.urts-readiness;
+      };
       libraries = import ./flake/libraries.nix {
         inherit pkgs toolchain sgx;
       };
@@ -33,10 +41,8 @@
         "sgxwallet"
         "signal-cds"
       ];
-      modes = [
-        "raw"
-        "anchor"
-      ];
+      anchorModes = [ "raw" "anchor" ];
+      realModes = [ "raw" "anchor" "protect" ];
       upstreamEnv = {
         qe3 = {
           ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.qe3}";
@@ -62,17 +68,19 @@
       mkSampleShell =
         group: name: mode:
         let
+          libraryMode = if mode == "protect" then "anchor" else mode;
+          sampleSgx = if mode == "protect" then sgx.protect else sgx;
           sampleLibraries =
             if group == "anchor" && name == "curve25519-donna" then
-              [ libraries."curve25519-donna".${mode} ]
+              [ libraries."curve25519-donna".${libraryMode} ]
             else if group == "anchor" && name == "yescrypt" then
-              [ libraries.yescrypt.${mode} ]
+              [ libraries.yescrypt.${libraryMode} ]
             else if group == "real" && name == "ehsm" then
-              [ real.libraries.sgxssl.${mode} ]
+              [ real.libraries.sgxssl.${libraryMode} ]
             else if group == "real" && name == "sgxwallet" then
               [
-                real.libraries.gmp.${mode}
-                real.libraries.mcl.${mode}
+                real.libraries.gmp.${libraryMode}
+                real.libraries.mcl.${libraryMode}
               ]
             else
               [ ];
@@ -80,7 +88,7 @@
             pkgs.openssl
             pkgs.stdenv.cc.cc.lib
             pkgs.zlib
-            sgx.psw
+            sampleSgx.psw
           ];
         in
         (pkgs.mkShell.override { stdenv = toolchain.stdenv; }) {
@@ -89,16 +97,18 @@
             pkgs.coreutils
             pkgs.ninja
             pkgs.openssl
-            sgx.psw
-            sgx.sdk
-            sgx.trusted.${mode}
+            sampleSgx.psw
+            sampleSgx.sdk
+            sgx.trusted.${libraryMode}
             toolchain.atfieldLlc
             toolchain.enclaveCompiler
             toolchain.lld
           ]
+          ++ lib.optionals (mode == "protect") [ pkgs.python3 ]
           ++ sampleLibraries;
           env = {
-            ATFIELD_ANCHOR_PREPARATION = if mode == "anchor" then "1" else "0";
+            ATFIELD_ANCHOR_PREPARATION = if mode == "raw" then "0" else "1";
+            ATFIELD_FIELD_BOUNDARY = if mode == "protect" then "1" else "0";
             ATFIELD_AR = "${toolchain.atfieldLlc}/bin/llvm-ar";
             ATFIELD_CC = "${toolchain.stdenv.cc}/bin/cc";
             ATFIELD_CXX = "${toolchain.stdenv.cc}/bin/c++";
@@ -115,9 +125,9 @@
             SGX_ARCH = "x64";
             SGX_ENCLAVE_CLANG = "${toolchain.enclaveCompiler}/bin/enclave-clang-ir-consistent";
             SGX_MODE = "HW";
-            SGX_PSW_ROOT = "${sgx.psw}";
-            SGX_SDK_ROOT = "${sgx.sdk}";
-            SGX_TRUSTED_LIB_ROOT = "${sgx.trusted.${mode}}";
+            SGX_PSW_ROOT = "${sampleSgx.psw}";
+            SGX_SDK_ROOT = "${sampleSgx.sdk}";
+            SGX_TRUSTED_LIB_ROOT = "${sgx.trusted.${libraryMode}}";
           }
           // lib.optionalAttrs (group == "anchor" && name == "curve25519-donna") {
             CURVE25519_DONNA_SGX_ROOT = "${builtins.head sampleLibraries}";
@@ -126,21 +136,21 @@
             YESCRYPT_SGX_ROOT = "${builtins.head sampleLibraries}";
           }
           // lib.optionalAttrs (group == "real" && name == "ehsm") {
-            SGXSSL_ROOT = "${real.libraries.sgxssl.${mode}}";
+            SGXSSL_ROOT = "${real.libraries.sgxssl.${libraryMode}}";
           }
           // lib.optionalAttrs (group == "real" && name == "sgxwallet") {
-            SGX_GMP_ROOT = "${real.libraries.gmp.${mode}}";
-            SGX_MCL_ROOT = "${real.libraries.mcl.${mode}}";
+            SGX_GMP_ROOT = "${real.libraries.gmp.${libraryMode}}";
+            SGX_MCL_ROOT = "${real.libraries.mcl.${libraryMode}}";
           }
           // lib.optionalAttrs (group == "real") upstreamEnv.${name};
         };
       sampleShells = lib.listToAttrs (
         lib.concatMap (
           name:
-          map (mode: lib.nameValuePair "anchor-${name}-${mode}" (mkSampleShell "anchor" name mode)) modes
+          map (mode: lib.nameValuePair "anchor-${name}-${mode}" (mkSampleShell "anchor" name mode)) anchorModes
         ) anchorNames
         ++ lib.concatMap (
-          name: map (mode: lib.nameValuePair "real-${name}-${mode}" (mkSampleShell "real" name mode)) modes
+          name: map (mode: lib.nameValuePair "real-${name}-${mode}" (mkSampleShell "real" name mode)) realModes
         ) realNames
       );
       packageOutputs = {
@@ -156,7 +166,9 @@
         mcl-sgx-anchor = real.libraries.mcl.anchor;
         mcl-sgx-raw = real.libraries.mcl.raw;
         sgx-psw = sgx.psw;
+        sgx-psw-readiness = sgx.protect.psw;
         sgx-sdk = sgx.sdk;
+        sgx-sdk-readiness = sgx.protect.sdk;
         sgx-trusted-anchor = sgx.trusted.anchor;
         sgx-trusted-raw = sgx.trusted.raw;
         yescrypt-sgx-anchor = libraries.yescrypt.anchor;
