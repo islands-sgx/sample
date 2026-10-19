@@ -90,9 +90,22 @@
             pkgs.zlib
             sampleSgx.psw
           ];
+          implementRoot = "${toolchain.implementBundle}";
+          protectPackages = lib.optionals (mode == "protect") [
+            toolchain.implementBundle
+          ];
+          implementRuntime = if mode == "protect" then
+            toolchain.implementBundle
+          else
+            toolchain.implementTools;
+          protectEnv = lib.optionalAttrs (mode == "protect") {
+            ATFIELD_FIELD_TOOL = "${implementRoot}/bin/atfield-field";
+            ATFIELD_IMPLEMENT_ROOT = implementRoot;
+          };
         in
         (pkgs.mkShell.override { stdenv = toolchain.stdenv; }) {
           packages = [
+            pkgs.bun
             pkgs.cmake
             pkgs.coreutils
             pkgs.ninja
@@ -101,10 +114,13 @@
             sampleSgx.sdk
             sgx.trusted.${libraryMode}
             toolchain.atfieldLlc
-            toolchain.enclaveCompiler
             toolchain.lld
           ]
-          ++ lib.optionals (mode == "protect") [ pkgs.python3 ]
+          ++ lib.optionals (mode != "protect") [
+            toolchain.enclaveCompiler
+            toolchain.implementTools
+          ]
+          ++ protectPackages
           ++ sampleLibraries;
           env = {
             ATFIELD_ANCHOR_PREPARATION = if mode == "raw" then "0" else "1";
@@ -115,17 +131,19 @@
             ATFIELD_LLC = "${toolchain.atfieldLlc}/bin/llc";
             ATFIELD_LLD = "${toolchain.lld}/bin/ld.lld";
             ATFIELD_MODE = mode;
+            ATFIELD_NATIVE_ANCHORS = "${implementRuntime}/build/anchor/inject-native-anchors.ts";
             ATFIELD_NM = "${toolchain.atfieldLlc}/bin/llvm-nm";
             ATFIELD_OBJCOPY = "${toolchain.atfieldLlc}/bin/llvm-objcopy";
             ATFIELD_PAYLOAD_NAMESPACE = "${group}/${name}";
             ATFIELD_RANLIB = "${toolchain.atfieldLlc}/bin/llvm-ranlib";
             ATFIELD_READELF = "${toolchain.atfieldLlc}/bin/llvm-readelf";
             ATFIELD_SAMPLE_SHELL = "${group}/${name}/${mode}";
+            ATFIELD_IMPLEMENT_TOOLS = "${implementRuntime}";
             LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibraries;
             SGX_ARCH = "x64";
             SGX_ENCLAVE_CLANG =
               if mode == "protect" then
-                "${toolchain.implementBundle}/cli/enclave-clang"
+                "${implementRoot}/bin/atfield-enclave-clang"
               else
                 "${toolchain.enclaveCompiler}/bin/enclave-clang-ir-consistent";
             SGX_MODE = "HW";
@@ -146,10 +164,7 @@
             SGX_GMP_ROOT = "${real.libraries.gmp.${libraryMode}}";
             SGX_MCL_ROOT = "${real.libraries.mcl.${libraryMode}}";
           }
-          // lib.optionalAttrs (mode == "protect") {
-            ATFIELD_FIELD_TOOL = "${toolchain.atfieldField}/bin/atfield-field";
-            ATFIELD_IMPLEMENT_ROOT = "${toolchain.implementBundle}";
-          }
+          // protectEnv
           // lib.optionalAttrs (group == "real") upstreamEnv.${name};
         };
       sampleShells = lib.listToAttrs (
@@ -162,7 +177,9 @@
         ) realNames
       );
       packageOutputs = {
+        atfield-bundle = toolchain.implementBundle;
         atfield-llc = toolchain.atfieldLlc;
+        atfield-tools = toolchain.implementTools;
         curve25519-donna-sgx-anchor = libraries."curve25519-donna".anchor;
         curve25519-donna-sgx-raw = libraries."curve25519-donna".raw;
         enclave-clang = toolchain.enclaveCompiler;

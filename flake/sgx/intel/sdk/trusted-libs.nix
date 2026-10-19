@@ -9,9 +9,11 @@
   libtool,
   llvmPackages,
   python3,
+  bun,
   which,
   writeShellScript,
   sdk,
+  implementTools,
   llvmTools ? llvmPackages.llvm,
   mode ? "raw",
 }:
@@ -21,11 +23,10 @@ let
   makeIrConsistentCompiler = name: compiler: writeShellScript name ''
     export SOURCE_DATE_EPOCH=1
     export ATFIELD_LLC=${llvmTools}/bin/llc
-    export ATFIELD_NATIVE_ANCHORS=${../../../../scripts/inject-native-anchors.py}
-    export ATFIELD_PYTHON=${python3}/bin/python3
+    export ATFIELD_NATIVE_ANCHORS=${implementTools}/build/anchor/inject-native-anchors.ts
     export ATFIELD_ANCHOR_PREPARATION=${anchorFlag}
     export ATFIELD_PAYLOAD_NAMESPACE=library/sgx-trusted-libs
-    exec ${stdenv.shell} ${../../../../scripts/compile-ir-object.sh} \
+    exec ${implementTools}/bin/atfield-compile-object \
       ${compiler} "$@" \
       -Wno-error=sign-conversion \
       -Wno-error=implicit-int-conversion \
@@ -37,7 +38,7 @@ let
   irConsistentCc = makeIrConsistentCompiler "sgx-trusted-clang" "${stdenv.cc}/bin/cc";
   irConsistentCxx = makeIrConsistentCompiler "sgx-trusted-clang++" "${stdenv.cc}/bin/c++";
   ippCrypto = callPackage ./ipp-crypto.nix {
-    inherit stdenv llvmPackages llvmTools;
+    inherit stdenv llvmPackages llvmTools implementTools;
     irConsistent = true;
     anchorPreparation = mode == "anchor";
     extraCmakeFlags = [
@@ -63,6 +64,7 @@ stdenv.mkDerivation {
     libtool
     llvmTools
     python3
+    bun
     which
   ];
 

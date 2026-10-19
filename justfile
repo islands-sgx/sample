@@ -5,10 +5,13 @@ default:
     @just --list
 
 build group name mode:
-    @bash scripts/build-sample.sh {{quote(group)}} {{quote(name)}} {{quote(mode)}}
+    @bun scripts/sample.ts build {{quote(group)}} {{quote(name)}} {{quote(mode)}}
 
 run group name mode *args:
-    @bash scripts/run-sample.sh "$1" "$2" "$3" "${@:4}"
+    @bun scripts/sample.ts run "$1" "$2" "$3" "${@:4}"
+
+test-sample-cli:
+    @bun test scripts/sample-cli.test.ts
 
 anchor-all:
     @just run anchor curve25519-donna raw

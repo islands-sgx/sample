@@ -35,6 +35,38 @@ function(_sgx_optimization profile optimization output_flags)
   set(${output_flags} ${flags} PARENT_SCOPE)
 endfunction()
 
+# Nix's cc wrapper adds NIX_LDFLAGS to the final link command. Dev-shell flags
+# may contain an output-directory RPATH under the current checkout, which makes
+# enclave measurements checkout-dependent. Clear linker RPATH options only for
+# enclave links; host links use the same filtered environment while retaining
+# their explicit PSW runtime paths below.
+function(_sgx_enclave_nix_ldflags output_flags)
+  separate_arguments(raw_flags UNIX_COMMAND "$ENV{NIX_LDFLAGS}")
+  set(clean_flags)
+  set(skip_value FALSE)
+  foreach(flag IN LISTS raw_flags)
+    if(skip_value)
+      if(flag MATCHES "^-")
+        message(FATAL_ERROR "[SGX] missing RPATH value before '${flag}' in NIX_LDFLAGS")
+      endif()
+      set(skip_value FALSE)
+    elseif(flag STREQUAL "-rpath" OR flag STREQUAL "--rpath" OR flag STREQUAL "-R")
+      set(skip_value TRUE)
+    elseif(flag MATCHES "^(-rpath|--rpath|--?R)=")
+      # Drop joined forms such as -rpath=/some/path.
+    elseif(flag MATCHES "^-Wl,.*(^|,)(-rpath|--rpath|-R)(,|=)")
+      message(FATAL_ERROR "[SGX] unsupported -Wl RPATH form in NIX_LDFLAGS: ${flag}")
+    else()
+      list(APPEND clean_flags "${flag}")
+    endif()
+  endforeach()
+  if(skip_value)
+    message(FATAL_ERROR "[SGX] incomplete RPATH option in NIX_LDFLAGS")
+  endif()
+  list(JOIN clean_flags " " clean_value)
+  set(${output_flags} "${clean_value}" PARENT_SCOPE)
+endfunction()
+
 function(sgx_find_sdk)
   if(NOT CMAKE_C_COMPILER_ID STREQUAL Clang)
     message(FATAL_ERROR "[SGX] this build requires Clang; got ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
@@ -183,7 +215,7 @@ function(sgx_add_sample)
 
   if(ATFIELD_MODE STREQUAL protect)
     if(NOT ATFIELD_IMPLEMENT_ROOT OR
-       NOT EXISTS "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.py")
+       NOT EXISTS "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.ts")
       message(FATAL_ERROR "protect requires the implement repository tools")
     endif()
     if(NOT ARG_PROTECT_HEAP OR NOT ARG_PROTECT_STACK OR NOT ARG_PROTECT_Q)
@@ -201,14 +233,12 @@ function(sgx_add_sample)
     if(NOT EXISTS "${selector_path}")
       message(FATAL_ERROR "protect requires ${selector_path}")
     endif()
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
     set(original_config "${CONFIG_PATH}")
     set(CONFIG_PATH "${CMAKE_BINARY_DIR}/Enclave.protect.config.xml")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-      "${original_config}" "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.py")
+      "${original_config}" "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.ts")
     execute_process(
-      COMMAND "${Python3_EXECUTABLE}"
-        "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.py"
+      COMMAND "${ATFIELD_IMPLEMENT_ROOT}/cli/protect-config.ts"
         "${original_config}" "${CONFIG_PATH}"
         --heap "${ARG_PROTECT_HEAP}" --stack "${ARG_PROTECT_STACK}"
       RESULT_VARIABLE config_result)
@@ -285,12 +315,21 @@ function(sgx_add_sample)
     LINK_DEPENDS "${CMAKE_SOURCE_DIR}/cmake/Enclave.lds"
     C_COMPILER_LAUNCHER "${codegen_launcher}"
     CXX_COMPILER_LAUNCHER "${codegen_launcher}")
+  _sgx_enclave_nix_ldflags(enclave_nix_ldflags)
+  if(NOT ATFIELD_MODE STREQUAL protect)
+    set(enclave_link_launcher
+      "${CMAKE_COMMAND}" -E env "NIX_LDFLAGS=${enclave_nix_ldflags}")
+    set_target_properties(${enclave_target} PROPERTIES
+      C_LINKER_LAUNCHER "${enclave_link_launcher}"
+      CXX_LINKER_LAUNCHER "${enclave_link_launcher}")
+  endif()
   if(ATFIELD_MODE STREQUAL protect)
     set_target_properties(${enclave_target} PROPERTIES OUTPUT_NAME enclave.profile)
     set(profile_link_launcher
-      "${Python3_EXECUTABLE}" "${ATFIELD_IMPLEMENT_ROOT}/cli/profile-link.py"
+      "${CMAKE_COMMAND}" -E env "NIX_LDFLAGS=${enclave_nix_ldflags}"
+      "${ATFIELD_IMPLEMENT_ROOT}/cli/profile-link.ts"
       --field-tool "${ATFIELD_FIELD_TOOL}"
-      --pretouch-tool "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py"
+      --pretouch-tool "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.ts"
       --capacity-q "${protect_q}"
       --assembler "${CMAKE_C_COMPILER}"
       --linker-script "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/post-rx-segment.ld"
@@ -300,8 +339,9 @@ function(sgx_add_sample)
       CXX_LINKER_LAUNCHER "${profile_link_launcher}")
     set_property(TARGET ${enclave_target} APPEND PROPERTY LINK_DEPENDS
       "${ATFIELD_FIELD_TOOL}"
-      "${ATFIELD_IMPLEMENT_ROOT}/cli/profile-link.py"
-      "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py"
+      "${ATFIELD_IMPLEMENT_ROOT}/cli/profile-link.ts"
+      "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.ts"
+      "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.ts"
       "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/post-rx-segment.ld")
     # The link launcher writes this manifest before the target's post-build step.
     # Declare the side effect so Ninja can order the signed-layout pipeline.
@@ -379,28 +419,27 @@ function(sgx_add_sample)
       VERBATIM)
     add_custom_command(
       OUTPUT "${workset_file}"
-      COMMAND "${Python3_EXECUTABLE}"
-              "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.py"
+      COMMAND "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.ts"
               --profile-elf "$<TARGET_FILE:${enclave_target}>"
               --signed-elf "${profile_signed}"
               --fields "${fields_file}" --capacity-q "${protect_q}"
               --selectors "${selector_path}" --edl "${EDL_PATH}"
               --out "${workset_file}"
       DEPENDS "${profile_signed}" "${fields_file}" "${selector_path}" "${EDL_PATH}"
-              "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.py"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.ts"
       COMMENT "[SGX] derive committed REG pages from signed Profile"
       VERBATIM)
     add_custom_command(
       OUTPUT "${final_file}" "${finalized_file}"
-      COMMAND "${Python3_EXECUTABLE}"
-              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py" finalize
+      COMMAND "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.ts" finalize
               --profile-elf "$<TARGET_FILE:${enclave_target}>"
               --signed-profile-elf "${profile_signed}"
               --workset "${workset_file}" --fields "${fields_file}"
               --capacity-q "${protect_q}"
               --out-elf "${final_file}" --out-json "${finalized_file}"
       DEPENDS "${workset_file}"
-              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.ts"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.ts"
       COMMENT "[SGX] fill the fixed Profile RX reservation"
       VERBATIM)
     add_custom_command(
@@ -420,22 +459,21 @@ function(sgx_add_sample)
       VERBATIM)
     add_custom_command(
       OUTPUT "${ready_file}" "${ready_summary}" "${verified_file}"
-      COMMAND "${Python3_EXECUTABLE}"
-              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py" verify
+      COMMAND "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.ts" verify
               --profile-elf "$<TARGET_FILE:${enclave_target}>"
               --signed-profile-elf "${profile_signed}"
               --final-elf "${final_file}" --signed-final-elf "${signed_file}"
               --workset "${workset_file}" --fields "${fields_file}"
               --capacity-q "${protect_q}" --out-json "${verified_file}"
-      COMMAND "${Python3_EXECUTABLE}"
-              "${ATFIELD_IMPLEMENT_ROOT}/build/readiness/readiness.py"
+      COMMAND "${ATFIELD_IMPLEMENT_ROOT}/build/readiness/readiness.ts"
               --workset "${workset_file}" --fields "${fields_file}"
               --pretouch "${verified_file}"
               --final-elf "${final_file}" --signed-final-elf "${signed_file}"
               --out "${ready_file}" --out-json "${ready_summary}"
       DEPENDS "${signed_file}" "${workset_file}"
-              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.py"
-              "${ATFIELD_IMPLEMENT_ROOT}/build/readiness/readiness.py"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/pretouch/pretouch.ts"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/workset/workset.ts"
+              "${ATFIELD_IMPLEMENT_ROOT}/build/readiness/readiness.ts"
       COMMENT "[SGX] verify Final and emit ECALL page-readiness table"
       VERBATIM)
     add_custom_target(${enclave_target}_signed ALL DEPENDS "${ready_file}")
@@ -480,7 +518,11 @@ function(sgx_add_sample)
   endif()
   target_link_libraries(host PRIVATE
     ${ARG_HOST_LIBRARIES} "${sgx_urts_library}" pthread)
+  set(host_link_launcher
+    "${CMAKE_COMMAND}" -E env "NIX_LDFLAGS=${enclave_nix_ldflags}")
   set_target_properties(host PROPERTIES
+    C_LINKER_LAUNCHER "${host_link_launcher}"
+    CXX_LINKER_LAUNCHER "${host_link_launcher}"
     BUILD_RPATH "${SGX_PSW_RUNTIME_DIRECTORIES}"
     INSTALL_RPATH "${SGX_PSW_RUNTIME_DIRECTORIES}")
   add_dependencies(host ${enclave_target}_signed)

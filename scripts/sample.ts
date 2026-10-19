@@ -1,0 +1,269 @@
+#!/usr/bin/env bun
+import { createHash, randomUUID } from "node:crypto";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+type Group = "anchor" | "real";
+type Mode = "raw" | "anchor" | "protect";
+type Action = "build" | "run";
+interface Sample { action: Action; group: Group; name: string; mode: Mode; hostArgs: string[]; }
+
+const scriptPath = fileURLToPath(import.meta.url);
+const projectRoot = resolve(dirname(scriptPath), "..");
+const usage = "usage: bun scripts/sample.ts build GROUP NAME MODE | bun scripts/sample.ts run GROUP NAME MODE [host args...]";
+
+function fail(message: string, code = 64): never {
+  console.error(message);
+  process.exit(code);
+}
+
+function parseArgs(args: string[]): Sample {
+  const action = args[0];
+  if (action !== "build" && action !== "run") fail(usage);
+  if (args.length < 4 || (action === "build" && args.length !== 4)) fail(usage);
+  const [, groupArg, name, modeArg, ...hostArgs] = args;
+  if (groupArg !== "anchor" && groupArg !== "real") fail("GROUP must be anchor or real");
+  if (modeArg !== "raw" && modeArg !== "anchor" && modeArg !== "protect") fail("MODE must be raw, anchor, or protect");
+  if (groupArg === "anchor" && modeArg === "protect") fail("anchor demonstrations have no Field or protect mode");
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) fail("NAME must use lower-case words separated by hyphens");
+  const group = groupArg as Group;
+  const mode = modeArg as Mode;
+  const sourceRoot = join(projectRoot, group, name);
+  if (!existsSync(join(sourceRoot, "CMakeLists.txt"))) fail(`unknown ${group} sample: ${name}`);
+  if (action === "run" && group === "anchor" && hostArgs.length > 0) fail("anchor samples do not accept host arguments");
+  if (action === "run" && mode === "protect") validateProtectRunnerOptions();
+  return { action, group, name, mode, hostArgs };
+}
+
+function validateProtectRunnerOptions(): void {
+  const runnerMode = process.env.ATFIELD_HOST_RUNNER ?? "on";
+  const readinessBackend = process.env.ATFIELD_READINESS_BACKEND ?? "kernel";
+  if (runnerMode !== "on" && runnerMode !== "off") fail("ATFIELD_HOST_RUNNER must be 'on' or 'off'");
+  if (readinessBackend !== "kernel" && readinessBackend !== "userspace") fail("ATFIELD_READINESS_BACKEND must be 'kernel' or 'userspace'");
+  if (runnerMode === "off" && process.env.ATFIELD_READINESS_BACKEND !== "userspace") {
+    fail("ATFIELD_HOST_RUNNER=off is research-only and requires explicit ATFIELD_READINESS_BACKEND=userspace");
+  }
+}
+
+function run(cmd: string[], options: { cwd?: string; env?: Record<string, string | undefined> } = {}): number {
+  const result = Bun.spawnSync({ cmd, cwd: options.cwd, env: options.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+  return result.exitCode ?? 1;
+}
+
+function ensureExecutable(path: string, message: string, code = 66): void {
+  try { accessSync(path, constants.X_OK); }
+  catch { fail(message, code); }
+}
+
+function commandExists(command: string): boolean {
+  if (command.includes("/")) {
+    try { accessSync(command, constants.X_OK); return true; } catch { return false; }
+  }
+  return (process.env.PATH ?? "").split(":").some((directory) => {
+    try { accessSync(join(directory, command), constants.X_OK); return true; } catch { return false; }
+  });
+}
+
+function ensureNixShell(sample: Sample): void {
+  const marker = `${sample.group}/${sample.name}/${sample.mode}`;
+  if (process.env.ATFIELD_SAMPLE_SHELL === marker) {
+    if (sample.mode === "protect") {
+      const implementRoot = process.env.ATFIELD_IMPLEMENT_ROOT;
+      if (!implementRoot || !existsSync(implementRoot)) {
+        fail("ATFIELD_IMPLEMENT_ROOT is missing or invalid in protect shell", 66);
+      }
+      try {
+        if (!statSync(implementRoot).isDirectory()) fail("ATFIELD_IMPLEMENT_ROOT is missing or invalid in protect shell", 66);
+      } catch { fail("ATFIELD_IMPLEMENT_ROOT is missing or invalid in protect shell", 66); }
+      process.env.ATFIELD_IMPLEMENT_ROOT = realpathSync(implementRoot);
+    }
+    return;
+  }
+
+  const shellName = `${sample.group}-${sample.name}-${sample.mode}`;
+  const envArgs = [`ATFIELD_SAMPLE_SHELL=${marker}`];
+  if (sample.mode === "protect" && process.env.ATFIELD_IMPLEMENT_ROOT) {
+    envArgs.push(`ATFIELD_IMPLEMENT_ROOT=${process.env.ATFIELD_IMPLEMENT_ROOT}`);
+  }
+  const result = run([
+    "nix", "develop", "--no-write-lock-file", `${projectRoot}#${shellName}`,
+    "--command", "env", ...envArgs, "bun", scriptPath, sample.action, sample.group, sample.name, sample.mode, ...sample.hostArgs,
+  ]);
+  process.exit(result);
+}
+
+function requireVariables(names: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of names) {
+    const value = process.env[name];
+    if (!value) fail(`${name} is missing from the sample Nix shell`, 66);
+    out[name] = value;
+  }
+  return out;
+}
+
+function samplePaths(sample: Sample) {
+  return { buildDir: join(projectRoot, "build", sample.group, sample.name, sample.mode) };
+}
+
+function buildSample(sample: Sample): void {
+  const { buildDir } = samplePaths(sample);
+  ensureNixShell(sample);
+  const tool = requireVariables([
+    "ATFIELD_CC", "ATFIELD_CXX", "ATFIELD_LLD", "ATFIELD_AR", "ATFIELD_RANLIB", "ATFIELD_NM",
+    "ATFIELD_OBJCOPY", "ATFIELD_READELF", "ATFIELD_LLC", "SGX_SDK_ROOT", "SGX_PSW_ROOT",
+    "SGX_TRUSTED_LIB_ROOT",
+  ]);
+  tool.SGX_ENCLAVE_CLANG = process.env.SGX_ENCLAVE_CLANG ?? "";
+  const cmakeArgs: string[] = [];
+  for (const name of [
+    "CURVE25519_DONNA_SGX_ROOT", "YESCRYPT_SGX_ROOT", "QE3_SOURCE_ROOT", "EHSM_SOURCE_ROOT",
+    "SGXWALLET_SOURCE_ROOT", "SIGNAL_CDS_SOURCE_ROOT", "SGXSSL_ROOT", "SGX_GMP_ROOT", "SGX_MCL_ROOT",
+  ]) {
+    const value = process.env[name];
+    if (value) cmakeArgs.push(`-D${name}=${value}`);
+  }
+
+  if (sample.mode === "protect") {
+    const implementRoot = process.env.ATFIELD_IMPLEMENT_ROOT;
+    if (!implementRoot || !existsSync(implementRoot)) fail("ATFIELD_IMPLEMENT_ROOT is missing or invalid in protect shell", 66);
+    const root = realpathSync(implementRoot);
+    process.env.ATFIELD_IMPLEMENT_ROOT = root;
+    process.env.ATFIELD_FIELD_BOUNDARY = "1";
+    const fieldTool = join(root, "bin", "atfield-field");
+    ensureExecutable(fieldTool, `implement Field tool is missing: ${fieldTool}`);
+    const enclaveClang = join(root, "bin", "atfield-enclave-clang");
+    ensureExecutable(enclaveClang, `implement enclave compiler is missing: ${enclaveClang}`);
+    tool.SGX_ENCLAVE_CLANG = enclaveClang;
+    process.env.ATFIELD_FIELD_TOOL = fieldTool;
+    cmakeArgs.push(`-DATFIELD_FIELD_TOOL=${fieldTool}`);
+  }
+
+  const cachePath = join(buildDir, "CMakeCache.txt");
+  if (existsSync(cachePath)) {
+    const cache = readFileSync(cachePath, "utf8");
+    if (!cache.split("\n").includes(`CMAKE_C_COMPILER:FILEPATH=${tool.ATFIELD_CC}`)) {
+      rmSync(cachePath, { force: true });
+      rmSync(join(buildDir, "CMakeFiles"), { recursive: true, force: true });
+    }
+  }
+
+  const configureArgs = [
+    "-S", projectRoot, "-B", buildDir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=",
+    `-DCMAKE_C_COMPILER=${tool.ATFIELD_CC}`, `-DCMAKE_CXX_COMPILER=${tool.ATFIELD_CXX}`,
+    `-DCMAKE_LINKER=${tool.ATFIELD_LLD}`, `-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=${tool.ATFIELD_LLD}`,
+    `-DCMAKE_AR=${tool.ATFIELD_AR}`, `-DCMAKE_RANLIB=${tool.ATFIELD_RANLIB}`,
+    `-DCMAKE_C_COMPILER_AR=${tool.ATFIELD_AR}`, `-DCMAKE_C_COMPILER_RANLIB=${tool.ATFIELD_RANLIB}`,
+    `-DCMAKE_CXX_COMPILER_AR=${tool.ATFIELD_AR}`, `-DCMAKE_CXX_COMPILER_RANLIB=${tool.ATFIELD_RANLIB}`,
+    `-DCMAKE_NM=${tool.ATFIELD_NM}`, `-DCMAKE_OBJCOPY=${tool.ATFIELD_OBJCOPY}`,
+    `-DCMAKE_READELF=${tool.ATFIELD_READELF}`, "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    `-DATFIELD_GROUP=${sample.group}`, `-DATFIELD_SAMPLE=${sample.name}`, `-DATFIELD_MODE=${sample.mode}`,
+    `-DATFIELD_IMPLEMENT_ROOT=${process.env.ATFIELD_IMPLEMENT_ROOT ?? ""}`,
+    `-DATFIELD_LLC=${tool.ATFIELD_LLC}`, `-DATFIELD_UPSTREAM_SOURCE_ROOT=${process.env.ATFIELD_UPSTREAM_SOURCE_ROOT ?? ""}`,
+    `-DATFIELD_UPSTREAM_PACKAGE=${process.env.ATFIELD_UPSTREAM_PACKAGE ?? ""}`,
+    `-DATFIELD_TEST_SIGNING_KEY=${join(projectRoot, "build", "test-signing-key.pem")}`,
+    `-DSGX_ENCLAVE_CLANG=${tool.SGX_ENCLAVE_CLANG}`, `-DSGX_SDK_ROOT=${tool.SGX_SDK_ROOT}`,
+    `-DSGX_PSW_ROOT=${tool.SGX_PSW_ROOT}`, `-DSGX_TRUSTED_LIB_ROOT=${tool.SGX_TRUSTED_LIB_ROOT}`,
+    ...cmakeArgs,
+  ];
+  const configureStatus = run(["cmake", ...configureArgs]);
+  if (configureStatus !== 0) process.exit(configureStatus);
+  const buildStatus = run(["cmake", "--build", buildDir, "--parallel"]);
+  if (buildStatus !== 0) process.exit(buildStatus);
+}
+
+function sha256(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+export function validateRunnerLibraryPath(libraryPath = process.env.LD_LIBRARY_PATH ?? ""): string {
+  if (!libraryPath) throw new Error("Nix shell LD_LIBRARY_PATH is empty; refusing root protect launch");
+  for (const directory of libraryPath.split(":")) {
+    let isDirectory = false;
+    if (directory && directory.startsWith("/nix/store/")) {
+      try { isDirectory = statSync(directory).isDirectory(); } catch { /* invalid or missing path */ }
+    }
+    if (!isDirectory) {
+      throw new Error(`protect runner only accepts existing Nix store library directories in LD_LIBRARY_PATH: ${directory}`);
+    }
+  }
+  return libraryPath;
+}
+
+function runSample(sample: Sample): void {
+  const { buildDir } = samplePaths(sample);
+  const runJson = join(buildDir, "run.json");
+  rmSync(runJson, { force: true });
+  ensureNixShell(sample);
+
+  const runnerMode = process.env.ATFIELD_HOST_RUNNER ?? "on";
+  const readinessBackend = process.env.ATFIELD_READINESS_BACKEND ?? "kernel";
+  let runnerPath = "";
+  let runnerLibraryPath = "";
+  if (sample.mode === "protect") {
+    process.env.ATFIELD_READINESS_BACKEND = readinessBackend;
+    if (runnerMode === "on") {
+      const implementRoot = process.env.ATFIELD_IMPLEMENT_ROOT;
+      if (!implementRoot || !existsSync(implementRoot)) fail("ATFIELD_IMPLEMENT_ROOT is missing or invalid in protect shell", 66);
+      try { runnerLibraryPath = validateRunnerLibraryPath(); }
+      catch (error) { fail(error instanceof Error ? error.message : String(error), 69); }
+      runnerPath = join(realpathSync(implementRoot), "bin", "atfield-host");
+      ensureExecutable(runnerPath, `protect host runner is missing or not executable: ${runnerPath}`);
+      if (!commandExists("sudo")) fail("sudo is required to launch protect hosts through atfield-host", 69);
+    } else {
+      console.error("RESEARCH ONLY: host CPU lease is bypassed; userspace-readiness is selected explicitly");
+    }
+  }
+
+  buildSample(sample);
+  if (process.env.SGX_MODE !== "HW") fail("SGX_MODE must be HW; simulation fallback is disabled", 69);
+  let device = "/dev/sgx_enclave";
+  if (existsSync("/dev/sgx/enclave")) device = "/dev/sgx/enclave";
+  try {
+    accessSync(device, constants.R_OK | constants.W_OK);
+  } catch {
+    fail(`SGX hardware device is unavailable or not accessible: ${device}`, 69);
+  }
+  const hostPath = join(buildDir, "host");
+  const imagePath = join(buildDir, "enclave.signed.so");
+  ensureExecutable(hostPath, `build output is incomplete: ${buildDir}`);
+  if (!existsSync(imagePath)) fail(`build output is incomplete: ${buildDir}`, 66);
+
+  const imageShaBefore = sha256(imagePath);
+  const hostShaBefore = sha256(hostPath);
+  let command: string[];
+  if (sample.mode === "protect" && runnerMode === "on") {
+    command = ["sudo", "--", runnerPath, "run", "--", "/usr/bin/env", `LD_LIBRARY_PATH=${runnerLibraryPath}`,
+      `ATFIELD_READINESS_BACKEND=${readinessBackend}`, "./host", ...sample.hostArgs];
+  } else if (sample.mode === "protect") {
+    command = ["./host", ...sample.hostArgs];
+  } else {
+    command = ["./host", ...sample.hostArgs];
+  }
+  const env = sample.mode === "protect" && runnerMode === "off"
+    ? { ...process.env, ATFIELD_READINESS_BACKEND: readinessBackend }
+    : process.env;
+  const exitCode = run(command, { cwd: buildDir, env });
+  if (exitCode !== 0) process.exit(exitCode);
+
+  const imageShaAfter = sha256(imagePath);
+  const hostShaAfter = sha256(hostPath);
+  if (imageShaBefore !== imageShaAfter || hostShaBefore !== hostShaAfter) fail("build outputs changed during the hardware run", 75);
+  mkdirSync(buildDir, { recursive: true });
+  const temporary = join(buildDir, `.run.json.${process.pid}.${randomUUID()}`);
+  try {
+    writeFileSync(temporary, `${JSON.stringify({ exitCode: 0, imageSha256: imageShaBefore, hostSha256: hostShaBefore })}\n`, { flag: "wx" });
+    renameSync(temporary, runJson);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+function main(): void {
+  const sample = parseArgs(process.argv.slice(2));
+  if (sample.action === "build") buildSample(sample);
+  else runSample(sample);
+}
+
+if (import.meta.main) main();

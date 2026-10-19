@@ -1,154 +1,65 @@
-import { validateMode } from "./anchor-report.ts";
-import { afterAll, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import { validateRunnerLibraryPath } from "./sample";
 
-const root = resolve(import.meta.dir, "..");
-const tempRoot = mkdtempSync(join(tmpdir(), "sample-cli-"));
-const fakeBin = join(tempRoot, "bin");
-const capture = join(tempRoot, "nix-argv.bin");
+const cli = join(import.meta.dir, "sample.ts");
 
-mkdirSync(fakeBin);
-writeFileSync(
-  join(fakeBin, "nix"),
-  '#!/usr/bin/env bash\nprintf "%s\\0" "$@" > "$CAPTURE"\nexit 99\n',
-);
-chmodSync(join(fakeBin, "nix"), 0o755);
-const env = {
-  ...process.env,
-  PATH: `${fakeBin}:${process.env.PATH}`,
-  CAPTURE: capture,
-};
-
-afterAll(() => {
-  rmSync(tempRoot, { recursive: true, force: true });
-});
-
-function run(script: string, args: string[], inputEnv = env) {
-  if (existsSync(capture)) rmSync(capture);
-  return spawnSync("bash", [resolve(root, "scripts", script), ...args], {
-    cwd: tempRoot,
-    encoding: "utf8",
-    env: inputEnv,
+type Result = { exitCode: number; stderr: string; stdout: string };
+function invoke(args: string[], extraEnv: Record<string, string> = {}): Result {
+  const result = Bun.spawnSync({
+    cmd: [process.execPath, cli, ...args],
+    cwd: join(import.meta.dir, ".."),
+    env: { ...process.env, ATFIELD_SAMPLE_SHELL: "", ...extraEnv },
+    stdout: "pipe",
+    stderr: "pipe",
   });
+  return {
+    exitCode: result.exitCode ?? 1,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  };
 }
 
-function reject(script: string, args: string[], pattern: RegExp) {
-  const result = run(script, args);
-  expect(result.status).toBe(64);
-  expect(result.stderr).toMatch(pattern);
-  expect(existsSync(capture)).toBe(false);
-}
+describe("sample CLI rejects invalid requests before entering Nix", () => {
+  test.each([
+    { args: ["build", "other", "yescrypt", "raw"], message: "GROUP must be anchor or real" },
+    { args: ["build", "anchor", "yescrypt", "invalid"], message: "MODE must be raw, anchor, or protect" },
+    { args: ["build", "anchor", "yescrypt", "protect"], message: "anchor demonstrations have no Field or protect mode" },
+    { args: ["build", "anchor", "Bad_Name", "raw"], message: "NAME must use lower-case words separated by hyphens" },
+    { args: ["build", "anchor", "not-a-sample", "raw"], message: "unknown anchor sample: not-a-sample" },
+  ])("rejects $args", ({ args, message }) => {
+    const result = invoke(args);
+    expect(result.exitCode).toBe(64);
+    expect(result.stderr).toContain(message);
+  });
 
-test("shared CLI rejects invalid selectors before entering Nix", () => {
-  reject("build-sample.sh", ["bench", "sqlite", "raw"], /GROUP must be anchor or real/);
-  reject("build-sample.sh", ["anchor", "sqlite", "bench"], /MODE must be raw, anchor, or protect/);
-  reject("build-sample.sh", ["anchor", "../sqlite", "raw"], /NAME must use lower-case words/);
-  reject("run-sample.sh", ["anchor", "not/a/sample", "raw"], /NAME must use lower-case words/);
-  reject("run-sample.sh", ["anchor", "missing", "raw"], /unknown anchor sample: missing/);
+  test("requires exact build arguments", () => {
+    const result = invoke(["build", "anchor", "yescrypt", "raw", "extra"]);
+    expect(result.exitCode).toBe(64);
+    expect(result.stderr).toContain("usage:");
+  });
+
+  test("anchor run rejects host arguments", () => {
+    const result = invoke(["run", "anchor", "yescrypt", "raw", "--help"]);
+    expect(result.exitCode).toBe(64);
+    expect(result.stderr).toContain("anchor samples do not accept host arguments");
+  });
+
+  test.each([
+    { env: { ATFIELD_HOST_RUNNER: "maybe" }, message: "ATFIELD_HOST_RUNNER must be 'on' or 'off'" },
+    { env: { ATFIELD_READINESS_BACKEND: "invalid" }, message: "ATFIELD_READINESS_BACKEND must be 'kernel' or 'userspace'" },
+    { env: { ATFIELD_HOST_RUNNER: "off" }, message: "requires explicit ATFIELD_READINESS_BACKEND=userspace" },
+  ])("rejects protect runner configuration $env", ({ env, message }) => {
+    const result = invoke(["run", "real", "ehsm", "protect"], env);
+    expect(result.exitCode).toBe(64);
+    expect(result.stderr).toContain(message);
+  });
 });
 
-test("build and run reject missing arguments before entering Nix", () => {
-  reject("build-sample.sh", ["real", "sgxwallet"], /usage: build-sample\.sh GROUP NAME MODE/);
-  reject("run-sample.sh", ["real", "sgxwallet"], /usage: run-sample\.sh GROUP NAME MODE/);
-});
-
-test("run rejects alternate anchor image arguments before a build", () => {
-  reject("run-sample.sh", ["anchor", "sqlite", "raw", "alternate-enclave.so"],
-    /anchor samples do not accept host arguments/);
-});
-
-test("sample_setup accepts a valid sample", () => {
-  const result = spawnSync("bash", ["-c",
-    `source ${JSON.stringify(resolve(root, "scripts/sample.sh"))}; sample_setup real sgxwallet anchor`],
-    { cwd: tempRoot, encoding: "utf8", env });
-  expect(result.status).toBe(0);
-  expect(result.stderr).toBe("");
-});
-
-test("sample_enter_shell preserves Nix arguments and skips a matching shell", () => {
-  const script = resolve(root, "scripts/sample.sh");
-  const command = `
-    source ${JSON.stringify(script)};
-    sample_setup real sgxwallet anchor;
-    ATFIELD_SAMPLE_SHELL=$sample_marker;
-    sample_enter_shell /test/entry real sgxwallet anchor 'arg with spaces'
-  `;
-  const matching = spawnSync("bash", ["-c", command],
-    { cwd: tempRoot, encoding: "utf8", env });
-  expect(matching.status).toBe(0);
-  expect(existsSync(capture)).toBe(false);
-
-  const mismatching = spawnSync("bash", ["-c", `
-    source ${JSON.stringify(script)};
-    sample_setup real sgxwallet anchor;
-    ATFIELD_SAMPLE_SHELL=real/sgxwallet/raw;
-    sample_enter_shell /test/entry real sgxwallet anchor 'arg with spaces'
-  `], { cwd: tempRoot, encoding: "utf8", env });
-  expect(mismatching.status).toBe(99);
-  const argv = readFileSync(capture).toString("utf8").split("\0");
-  argv.pop();
-  expect(argv).toEqual([
-    "develop",
-    "--no-write-lock-file",
-    `${root}#real-sgxwallet-anchor`,
-    "--command",
-    "env",
-    "ATFIELD_SAMPLE_SHELL=real/sgxwallet/anchor",
-    "bash",
-    "/test/entry",
-    "real",
-    "sgxwallet",
-    "anchor",
-    "arg with spaces",
-  ]);
-});
-
-test("anchor-report validateMode enforces anchor coverage and raw baseline", () => {
-  expect(() =>
-    validateMode("anchor/sqlite", "raw", {
-      pagesWithoutC3Candidate: ["0x1000"],
-      pagesWithoutNamedAnchor: ["0x1000"],
-      namedNaturalAnchors: 0,
-      namedConstructedAnchors: 0,
-    }),
-  ).not.toThrow();
-
-  expect(() =>
-    validateMode("anchor/sqlite", "raw", {
-      pagesWithoutC3Candidate: [],
-      pagesWithoutNamedAnchor: [],
-      namedNaturalAnchors: 1,
-      namedConstructedAnchors: 0,
-    }),
-  ).toThrow(/unexpected named ATField anchors in raw baseline/);
-
-  expect(() =>
-    validateMode("anchor/sqlite", "anchor", {
-      pagesWithoutC3Candidate: ["0x1000"],
-      pagesWithoutNamedAnchor: [],
-      namedNaturalAnchors: 10,
-      namedConstructedAnchors: 1,
-    }),
-  ).toThrow(/executable pages missing stable C3 candidate: 0x1000/);
-
-  expect(() =>
-    validateMode("anchor/sqlite", "anchor", {
-      pagesWithoutC3Candidate: [],
-      pagesWithoutNamedAnchor: ["0x2000"],
-      namedNaturalAnchors: 10,
-      namedConstructedAnchors: 1,
-    }),
-  ).toThrow(/executable pages missing named anchor symbol: 0x2000/);
-
-  expect(() =>
-    validateMode("anchor/sqlite", "anchor", {
-      pagesWithoutC3Candidate: [],
-      pagesWithoutNamedAnchor: [],
-      namedNaturalAnchors: 10,
-      namedConstructedAnchors: 1,
-    }),
-  ).not.toThrow();
+test("protect runner rejects a missing LD_LIBRARY_PATH component", () => {
+  const missingDirectory = `/nix/store/sample-cli-missing-${randomUUID()}`;
+  expect(() => validateRunnerLibraryPath(missingDirectory)).toThrow(
+    "protect runner only accepts existing Nix store library directories in LD_LIBRARY_PATH",
+  );
 });

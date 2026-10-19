@@ -6,6 +6,8 @@
   nasm,
   openssl,
   python3,
+  bun,
+  implementTools ? null,
   writeShellScript,
   llvmPackages ? null,
   llvmTools ? (if llvmPackages == null then null else llvmPackages.llvm),
@@ -14,16 +16,16 @@
   extraCmakeFlags ? [ ],
 }:
 assert !irConsistent || llvmPackages != null;
+assert !(irConsistent || anchorPreparation) || implementTools != null;
 let
   anchorFlag = if anchorPreparation then "1" else "0";
   makeIrConsistentCompiler = name: compiler: writeShellScript name ''
     export SOURCE_DATE_EPOCH=1
     export ATFIELD_LLC=${llvmTools}/bin/llc
-    export ATFIELD_NATIVE_ANCHORS=${../../../../scripts/inject-native-anchors.py}
-    export ATFIELD_PYTHON=${python3}/bin/python3
+    export ATFIELD_NATIVE_ANCHORS=${implementTools}/build/anchor/inject-native-anchors.ts
     export ATFIELD_ANCHOR_PREPARATION=${anchorFlag}
     export ATFIELD_PAYLOAD_NAMESPACE=library/ipp-crypto
-    exec ${stdenv.shell} ${../../../../scripts/compile-ir-object.sh} \
+    exec ${implementTools}/bin/atfield-compile-object \
       ${compiler} "$@" \
       -Wno-error=sign-conversion -Wno-error=implicit-int-conversion
   '';
@@ -45,7 +47,7 @@ let
       payloadHash=$(printf '%s' "$payloadName" | sha256sum)
       payloadHash=''${payloadHash:0:16}
       printf -v payloadOrdinal '%u' "0x$payloadHash"
-      ${python3}/bin/python3 ${../../../../scripts/inject-native-anchors.py} \
+      ${implementTools}/bin/atfield-inject-native-anchors \
         "$outputFile" "$payloadOrdinal"
     fi
   '';
@@ -165,9 +167,11 @@ stdenv.mkDerivation rec {
   '';
 
   nativeBuildInputs = [
+    bun
     cmake
     nasm
     openssl
     python3
-  ] ++ lib.optionals irConsistent [ llvmTools ];
+  ] ++ lib.optionals irConsistent [ llvmTools ]
+    ++ lib.optionals (irConsistent || anchorPreparation) [ bun ];
 }

@@ -11,43 +11,14 @@ let
   };
   stdenv = pkgs.overrideCC llvmPackages.stdenv llvmWrappedCC;
   lld = llvmPackages.lld;
+  implement = import "${implementSrc}/nix/default.nix" {
+    inherit pkgs implementSrc atfieldLlc;
+    inherit stdenv;
+  };
   enclaveCompiler = pkgs.writeShellScriptBin "enclave-clang-ir-consistent" ''
     export ATFIELD_LLC="${atfieldLlc}/bin/llc"
-    export ATFIELD_NATIVE_ANCHORS=${../scripts/inject-native-anchors.py}
-    export ATFIELD_PYTHON="${pkgs.python3}/bin/python3"
-    exec ${pkgs.bash}/bin/bash ${../scripts/compile-ir-object.sh} \
-      "${stdenv.cc}/bin/cc" "$@"
-  '';
-  atfieldField = pkgs.stdenv.mkDerivation {
-    pname = "atfield-field";
-    version = "0.1.0";
-    src = "${implementSrc}/build/field";
-    nativeBuildInputs = [
-      pkgs.cmake
-      pkgs.ninja
-    ];
-    buildInputs = [
-      atfieldLlc.dev
-      pkgs.libxml2
-      pkgs.zlib
-      pkgs.zstd
-    ];
-    cmakeFlags = [
-      "-DLLVM_DIR=${atfieldLlc.dev}/lib/cmake/llvm"
-    ];
-    installPhase = ''
-      runHook preInstall
-      install -Dm755 atfield-field "$out/bin/atfield-field"
-      runHook postInstall
-    '';
-  };
-  implementBundle = pkgs.runCommand "atfield-implement" { } ''
-    cp -r ${implementSrc} "$out"
-    chmod -R u+w "$out"
-    mkdir -p "$out/build/field/.build-host"
-    ln -sf "${atfieldField}/bin/atfield-field" "$out/build/field/.build-host/atfield-field"
-    patchShebangs "$out/cli" "$out/build" "$out/host/runner"
-    chmod -R a-w "$out"
+    export ATFIELD_NATIVE_ANCHORS="${implement.tools}/build/anchor/inject-native-anchors.ts"
+    exec ${implement.tools}/bin/atfield-compile-object "${stdenv.cc}/bin/cc" "$@"
   '';
 in
 {
@@ -57,7 +28,7 @@ in
     atfieldLlc
     lld
     enclaveCompiler
-    atfieldField
-    implementBundle
     ;
+  implementTools = implement.tools;
+  implementBundle = implement.bundle;
 }

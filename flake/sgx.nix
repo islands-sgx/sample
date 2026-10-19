@@ -5,6 +5,7 @@ let
   mkTrusted = mode: pkgs.callPackage ./sgx/intel/sdk/trusted-libs.nix {
     inherit (toolchain) stdenv;
     inherit llvmPackages sdk;
+    inherit (toolchain) implementTools;
     llvmTools = toolchain.atfieldLlc;
     inherit mode;
   };

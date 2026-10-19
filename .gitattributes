@@ -1,0 +1,1 @@
+flake/package/patches/*.patch whitespace=-space-before-tab

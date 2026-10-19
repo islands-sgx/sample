@@ -3,13 +3,14 @@
   fetchurl,
   patch,
   perl,
-  python3,
+  bun,
   which,
   writeShellScript,
   writeTextDir,
   stdenv,
   llvmTools,
   enclaveCompiler,
+  implementTools,
   sgxSdk,
   mode,
 }:
@@ -22,9 +23,8 @@ let
   makeIrConsistentCompiler = name: compiler: extraArgs:
     writeShellScript name ''
       export ATFIELD_LLC=${llvmTools}/bin/llc
-      export ATFIELD_NATIVE_ANCHORS=${../../scripts/inject-native-anchors.py}
-      export ATFIELD_PYTHON=${python3}/bin/python3
-      exec ${stdenv.shell} ${../../scripts/compile-ir-object.sh} \
+      export ATFIELD_NATIVE_ANCHORS=${implementTools}/build/anchor/inject-native-anchors.ts
+      exec ${implementTools}/bin/atfield-compile-object \
         ${compiler} ${lib.escapeShellArgs extraArgs} "$@"
     '';
   irConsistentCc =
@@ -63,7 +63,7 @@ stdenv.mkDerivation {
     patch
     llvmTools
     perl
-    python3
+    bun
     which
   ];
 
@@ -87,35 +87,10 @@ stdenv.mkDerivation {
                      'tar xvf $OPENSSL_VERSION.tar.gz > /dev/null || exit 1
 patch -d "$OPENSSL_VERSION" -p1 --batch < ${./patches/openssl-fixed-cpu.patch} || exit 1'
   '' + lib.optionalString (mode == "anchor") ''
-    python3 - <<'PY'
-from pathlib import Path
-p = Path("Linux/build_openssl.sh")
-old = "sed -i '/BSAES_ASM/d' $OPENSSL_VERSION/Configure"
-new = old + r"""
-python3 - "$OPENSSL_VERSION" <<'INNER' || exit 1
-import sys
-from pathlib import Path
-ossl = Path(sys.argv[1])
-p1 = ossl / "crypto/sha/asm/sha1-mb-x86_64.pl"
-t1 = p1.read_text()
-for marker in (
-    'vmovdqa\t0x00($Tbl),$K\\n";\t# K_20_39\n',
-    'vmovdqa\t0x20($Tbl),$K\\n";\t# K_40_59\n',
-    'vmovdqa\t0x40($Tbl),$K\\n";\t# K_60_79\n',
-):
-    assert marker in t1, marker
-    t1 = t1.replace(marker, marker + '$code.="\t.byte\t0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00\\n";\n')
-p1.write_text(t1)
-p2 = ossl / "crypto/sha/asm/sha512-x86_64.pl"
-t2 = p2.read_text()
-target2 = '\tjmp\t.Lrounds_16_xx\n'
-assert target2 in t2
-p2.write_text(t2.replace(target2, '\t.byte\t0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00\n' + target2))
-INNER"""
-txt = p.read_text()
-assert old in txt
-p.write_text(txt.replace(old, new, 1))
-PY
+    substituteInPlace Linux/build_openssl.sh \
+      --replace-fail "sed -i '/BSAES_ASM/d' \$OPENSSL_VERSION/Configure" \
+                     "sed -i '/BSAES_ASM/d' \$OPENSSL_VERSION/Configure
+patch -d \"\$OPENSSL_VERSION\" -p1 --batch --forward --fuzz=0 < ${./patches/openssl-3.0.21-anchor.patch} || exit 1"
   '';
 
   buildPhase = ''

@@ -4,11 +4,13 @@
   coreutils,
   gnumake,
   python3,
+  bun,
   writeShellScript,
   writeText,
   stdenv,
   llvmTools,
   enclaveCompiler,
+  implementTools,
   sgxSdk,
   mode,
 }:
@@ -19,8 +21,8 @@ let
   makeIrConsistentCompiler = name: compiler: extraArgs:
     writeShellScript name ''
       export ATFIELD_LLC=${llvmTools}/bin/llc
-      export ATFIELD_NATIVE_ANCHORS=${../../scripts/inject-native-anchors.py}
-      exec ${stdenv.shell} ${../../scripts/compile-ir-object.sh} \
+      export ATFIELD_NATIVE_ANCHORS=${implementTools}/build/anchor/inject-native-anchors.ts
+      exec ${implementTools}/bin/atfield-compile-object \
         ${compiler} ${lib.escapeShellArgs extraArgs} "$@"
     '';
   sgxCompatHeader = writeText "mcl-sgx-compat.h" ''
@@ -53,7 +55,7 @@ stdenv.mkDerivation {
     hash = "sha256-S+6/HQwSf51/ROrFe/BOxu3Iy5QNudmcjfuURN6J/HQ=";
   };
 
-  nativeBuildInputs = [ coreutils gnumake python3 llvmTools ];
+  nativeBuildInputs = [ coreutils gnumake python3 bun llvmTools ];
 
   dontConfigure = true;
   dontStrip = true;

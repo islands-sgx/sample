@@ -1,0 +1,28 @@
+--- a/crypto/sha/asm/sha1-mb-x86_64.pl
++++ b/crypto/sha/asm/sha1-mb-x86_64.pl
+@@ -1117,6 +1117,9 @@
+ $code.="	vmovdqa	0x00($Tbl),$K\n";	# K_20_39
++$code.="	.byte	0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00\n";
+ for(;$i<40;$i++)	{ &BODY_20_39_avx($i,@V); unshift(@V,pop(@V)); }
+ $code.="	vmovdqa	0x20($Tbl),$K\n";	# K_40_59
++$code.="	.byte	0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00\n";
+ for(;$i<60;$i++)	{ &BODY_40_59_avx($i,@V); unshift(@V,pop(@V)); }
+ $code.="	vmovdqa	0x40($Tbl),$K\n";	# K_60_79
++$code.="	.byte	0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00\n";
+ for(;$i<80;$i++)	{ &BODY_20_39_avx($i,@V); unshift(@V,pop(@V)); }
+@@ -1287,6 +1290,9 @@
+ $code.="	vmovdqa	0x00($Tbl),$K\n";	# K_20_39
++$code.="	.byte	0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00\n";
+ for(;$i<40;$i++)	{ &BODY_20_39_avx($i,@V); unshift(@V,pop(@V)); }
+ $code.="	vmovdqa	0x20($Tbl),$K\n";	# K_40_59
++$code.="	.byte	0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00\n";
+ for(;$i<60;$i++)	{ &BODY_40_59_avx($i,@V); unshift(@V,pop(@V)); }
+ $code.="	vmovdqa	0x40($Tbl),$K\n";	# K_60_79
++$code.="	.byte	0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00\n";
+ for(;$i<80;$i++)	{ &BODY_20_39_avx($i,@V); unshift(@V,pop(@V)); }
+--- a/crypto/sha/asm/sha512-x86_64.pl
++++ b/crypto/sha/asm/sha512-x86_64.pl
+@@ -358,2 +358,3 @@
+ $code.=<<___;
++	.byte	0x0f,0x1f,0x80,0xc3,0x00,0x00,0x00
+ 	jmp	.Lrounds_16_xx

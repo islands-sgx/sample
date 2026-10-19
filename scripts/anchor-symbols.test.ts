@@ -1,13 +1,16 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Elf, inspect, validateMode } from "./anchor-report.ts";
 
 const compiler = process.env.ATFIELD_LLC, linker = process.env.ATFIELD_LLD;
-if (!compiler || !linker) throw new Error("run in a sample Nix shell with ATFIELD_LLC and ATFIELD_LLD");
-const bin = dirname(compiler), root = resolve(import.meta.dir, "..");
+const injector = process.env.ATFIELD_NATIVE_ANCHORS;
+if (!compiler || !linker || !injector) {
+  throw new Error("run in a sample Nix shell with ATFIELD_LLC, ATFIELD_LLD, and ATFIELD_NATIVE_ANCHORS");
+}
+const bin = dirname(compiler);
 const temporary = mkdtempSync(join(tmpdir(), "anchor-symbols-"));
 afterAll(() => rmSync(temporary, { recursive: true, force: true }));
 function run(command: string, args: string[]) {
@@ -28,7 +31,7 @@ function link(name: string, object: string, extra: string[] = []) {
 }
 function facts(file: string) { return [...new Elf(readFileSync(file)).anchors.entries()]; }
 function inject(file: string) {
-  run("python3", [join(root, "scripts/inject-native-anchors.py"), file, "18446744073709551615"]);
+  run(injector!, [file, "18446744073709551615"]);
 }
 function anchor(name: string) {
   return ".globl " + name + "\n.hidden " + name + "\n" + name + ":";
@@ -57,8 +60,8 @@ test("native preserves every C3, relocations, complete IDs and repeatability", (
     ["ffffffffffffffff_0_2", 2]]);
   const partial = join(temporary, "partial.o");
   run(join(bin, "llvm-objcopy"), ["--strip-symbol=__atf_n_ffffffffffffffff_0_1", object, partial]);
-  const rejected = spawnSync("python3", [join(root, "scripts/inject-native-anchors.py"),
-    partial, "18446744073709551615"], { encoding: "utf8" });
+  const rejected = spawnSync(injector!, [partial, "18446744073709551615"],
+    { encoding: "utf8" });
   expect(rejected.status).not.toBe(0);
   expect(rejected.stderr).toMatch(/complete expected set/);
 });
