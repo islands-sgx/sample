@@ -5,7 +5,7 @@
       "locked": {
         "lastModified": 1792401825,
         "narHash": "sha256-TIPyMFSl0Bd9b+50XiuSlIS3VNgE51brOPg9u6qV/lQ=",
-        "ref": "fix/host-isolation-readback",
+        "ref": "refs/heads/main",
         "rev": "a6aa52dbedf8a2cee3ddca7d94b8abb0210bed1f",
         "revCount": 4,
         "type": "git",
