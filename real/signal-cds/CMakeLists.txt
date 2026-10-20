@@ -11,7 +11,7 @@ sgx_add_sample(
   CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/Enclave.config.xml"
   PROTECT_HEAP 0x400000
   PROTECT_STACK 0x40000
-  PROTECT_Q 0x3000
+  PROTECT_Q 0x4000
   SOURCES
     "${_SIGNAL_CDS_ENCLAVE_ROOT}/src/sabd-enclave.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/adapter.c"
