@@ -5,13 +5,19 @@ default:
     @just --list
 
 build group name mode:
-    @bun scripts/sample.ts build {{quote(group)}} {{quote(name)}} {{quote(mode)}}
+    @nix develop --no-write-lock-file --command bun scripts/sample.ts build {{quote(group)}} {{quote(name)}} {{quote(mode)}}
 
 run group name mode *args:
-    @bun scripts/sample.ts run "$1" "$2" "$3" "${@:4}"
+    @nix develop --no-write-lock-file --command bun scripts/sample.ts run "$1" "$2" "$3" "${@:4}"
 
 test-sample-cli:
-    @bun test scripts/sample-cli.test.ts
+    @nix develop --no-write-lock-file --command bun test scripts/sample-cli.test.ts
+
+test-anchor-report:
+    @nix develop --no-write-lock-file --command bun test scripts/anchor-report.test.ts
+
+anchor-report *args:
+    @nix develop --no-write-lock-file --command bun scripts/anchor-report.ts "${@:1}"
 
 anchor-all:
     @just run anchor curve25519-donna raw
@@ -22,4 +28,4 @@ anchor-all:
     @just run anchor yescrypt anchor
     @just run anchor sqlite raw
     @just run anchor sqlite anchor
-    @bun scripts/anchor-report.ts build
+    @just anchor-report build

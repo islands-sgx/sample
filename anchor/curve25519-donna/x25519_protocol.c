@@ -1,4 +1,4 @@
-#include "Enclave_t.h"
+#include "enclave_t.h"
 
 #include <stdint.h>
 #include <string.h>

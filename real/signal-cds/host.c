@@ -1,7 +1,7 @@
 #include <sgx_urts.h>
 
 #ifdef ATFIELD_PROTECT
-#include "../../common/atfield_readiness_host.h"
+#include <atfield_readiness_host.h>
 #endif
 
 #include <errno.h>
@@ -13,7 +13,7 @@
 #include <string.h>
 
 #include "sabd.h"
-#include "sabd_enclave_u.h"
+#include "enclave_u.h"
 
 #ifndef ENCLAVE_PATH
 #define ENCLAVE_PATH "enclave.signed.so"
@@ -25,16 +25,17 @@ typedef struct {
     size_t records;
     size_t queries;
     size_t requests;
-    bool upstream_cmockery;
-    long int upstream_seed;
-    size_t upstream_in_jids;
+    bool self_test;
+    long int seed;
+    size_t in_jids;
 } options_t;
 
 static void usage(const char *program)
 {
     fprintf(stderr,
-            "usage: %s [--records N] [--queries N] [--requests N]\n",
-            program);
+            "usage: %s [--records N] [--queries N] [--requests N]\n"
+            "       %s [--self-test] [--seed N] [--in-jids N]\n",
+            program, program);
 }
 
 static bool parse_size(const char *text, size_t *value)
@@ -54,30 +55,55 @@ static bool parse_size(const char *text, size_t *value)
     return true;
 }
 
+static bool parse_long(const char *text, long *value)
+{
+    if (text == NULL || text[0] == '\0' ||
+        (text[0] == ' ' || text[0] == '\t' || text[0] == '\n' ||
+         text[0] == '\r' || text[0] == '\f' || text[0] == '\v'))
+        return false;
+
+    char *end = NULL;
+    errno = 0;
+    long parsed = strtol(text, &end, 0);
+    if (errno == ERANGE || end == text || *end != '\0')
+        return false;
+    *value = parsed;
+    return true;
+}
+
 static bool parse_options(int argc, char **argv, options_t *options)
 {
     options->records = 8;
     options->queries = 6;
     options->requests = 2;
-    options->upstream_cmockery = false;
-    options->upstream_seed = 0x12345678L;
-    options->upstream_in_jids = 10000;
+    options->self_test = false;
+    options->seed = 0x12345678L;
+    options->in_jids = 10000;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return false;
         }
-        if (strcmp(argv[i], "--upstream-cmockery-test") == 0) {
-            options->upstream_cmockery = true;
+        if (strcmp(argv[i], "--self-test") == 0) {
+            options->self_test = true;
             continue;
         }
         if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
-            options->upstream_seed = strtol(argv[++i], NULL, 0);
+            if (!parse_long(argv[++i], &options->seed)) {
+                usage(argv[0]);
+                return false;
+            }
             continue;
         }
         if (strcmp(argv[i], "--in-jids") == 0 && i + 1 < argc) {
-            if (!parse_size(argv[++i], &options->upstream_in_jids)) return false;
+            if (!parse_size(argv[++i], &options->in_jids) ||
+                options->in_jids == 0 ||
+                options->in_jids > SIZE_MAX / sizeof(jid_t) ||
+                options->in_jids > SIZE_MAX / 2) {
+                usage(argv[0]);
+                return false;
+            }
             continue;
         }
         if (i + 1 >= argc) {
@@ -251,13 +277,8 @@ static int check_boundary(sgx_enclave_id_t enclave_id)
 }
 
 
-/* Ported directly from upstream signalapp/ContactDiscoveryService/enclave/src/sabd-enclave-test.c:
- * Preserves drand48_data / mrand48_r JID generation, setup_sabd_lookup_test,
- * test_sabd_lookup_batch_too_large, test_sabd_lookup_many_duplicates,
- * test_sabd_lookup_small_all_in_jids, test_sabd_lookup_small_no_in_jids,
- * test_sabd_lookup_small_random, and test_sabd_lookup_large with original assertions.
- */
-static int upstream_test_sabd_lookup(
+/* Lookup cases from enclave/src/sabd-enclave-test.c. */
+static int check_lookup_result(
     sgx_enclave_id_t enclave_id,
     const jid_t *test_in_jids,
     size_t in_jid_count,
@@ -282,7 +303,7 @@ static int upstream_test_sabd_lookup(
     return mismatch ? 1 : 0;
 }
 
-static int run_upstream_cmockery_suite(sgx_enclave_id_t enclave_id, long int seed, size_t in_jid_count)
+static int run_self_tests(sgx_enclave_id_t enclave_id, long int seed, size_t in_jid_count)
 {
     const uint32_t test_ab_jid_count = 2048;
     struct drand48_data drand_state;
@@ -342,7 +363,7 @@ static int run_upstream_cmockery_suite(sgx_enclave_id_t enclave_id, long int see
             ab_dup[i] = ab_dup[0];
             exp_dup[i] = exp_dup[0];
         }
-        failed = upstream_test_sabd_lookup(enclave_id, test_in_jids, in_jid_count, ab_dup, test_ab_jid_count, exp_dup);
+        failed = check_lookup_result(enclave_id, test_in_jids, in_jid_count, ab_dup, test_ab_jid_count, exp_dup);
         free(ab_dup);
         free(exp_dup);
     }
@@ -360,18 +381,18 @@ static int run_upstream_cmockery_suite(sgx_enclave_id_t enclave_id, long int see
             }
         }
         for (uint32_t c = 0; c <= cnt && !failed; c++) {
-            failed = upstream_test_sabd_lookup(enclave_id, test_in_jids, in_jid_count, ab_small, c, exp_small);
+            failed = check_lookup_result(enclave_id, test_in_jids, in_jid_count, ab_small, c, exp_small);
         }
     }
 
     /* 5. test_sabd_lookup_small_random (ab_jid_count = 0..25) */
     for (uint32_t c = 0; c <= 25 && !failed; c++) {
-        failed = upstream_test_sabd_lookup(enclave_id, test_in_jids, in_jid_count, test_ab_jids, c, test_expected);
+        failed = check_lookup_result(enclave_id, test_in_jids, in_jid_count, test_ab_jids, c, test_expected);
     }
 
     /* 6. test_sabd_lookup_large (ab_jid_count = 2048) */
     if (!failed) {
-        failed = upstream_test_sabd_lookup(enclave_id, test_in_jids, in_jid_count, test_ab_jids, test_ab_jid_count, test_expected);
+        failed = check_lookup_result(enclave_id, test_in_jids, in_jid_count, test_ab_jids, test_ab_jid_count, test_expected);
     }
 
     free(test_in_jids);
@@ -405,8 +426,8 @@ int main(int argc, char **argv)
 #endif
 
     int failed = 0;
-    if (options.upstream_cmockery) {
-        failed = run_upstream_cmockery_suite(enclave_id, options.upstream_seed, options.upstream_in_jids);
+    if (options.self_test) {
+        failed = run_self_tests(enclave_id, options.seed, options.in_jids);
     } else {
         const options_t defaults = {8, 6, 2, false, 0, 0};
         failed = check_fixed_cases(enclave_id) != 0 ||

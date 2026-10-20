@@ -7,7 +7,7 @@ find_path(
 
 sgx_add_sample(
   NAME curve25519-donna
-  EDL Enclave.edl
+  EDL enclave.edl
   PROFILE PRERELEASE
   OPTIMIZATION O3
   SOURCES enclave.c x25519_protocol.c

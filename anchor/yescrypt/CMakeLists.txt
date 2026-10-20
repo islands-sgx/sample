@@ -7,7 +7,7 @@ find_path(
 
 sgx_add_sample(
   NAME yescrypt
-  EDL Enclave.edl
+  EDL enclave.edl
   PROFILE DEBUG
   SOURCES enclave.c
   HOST_SOURCES app.c

@@ -19,10 +19,10 @@
 #include <string.h>
 
 #ifdef ATFIELD_PROTECT
-#include "../../common/atfield_readiness_host.h"
+#include <atfield_readiness_host.h>
 #endif
 
-#include "secure_enclave_u.h"
+#include "enclave_u.h"
 
 #ifndef ENCLAVE_PATH
 #define ENCLAVE_PATH "enclave.signed.so"
@@ -201,14 +201,18 @@ static bool verify_signature(const char *pub_x, const char *pub_y,
 static void sign_and_verify(sgx_enclave_id_t eid, uint8_t *encrypted_key,
                             uint64_t encrypted_len, const char *pub_x,
                             const char *pub_y,
-                            const std::array<uint8_t, 32> &hash)
+                            const std::array<uint8_t, 32> &hash,
+                            const char *hash_hex_override = nullptr)
 {
     static constexpr char kHex[] = "0123456789abcdef";
-    std::array<char, 65> hash_hex{};
+    std::array<char, 65> hash_hex_buffer{};
     for (size_t i = 0; i < hash.size(); ++i) {
-        hash_hex[i * 2] = kHex[hash[i] >> 4];
-        hash_hex[i * 2 + 1] = kHex[hash[i] & 0x0f];
+        hash_hex_buffer[i * 2] = kHex[hash[i] >> 4];
+        hash_hex_buffer[i * 2 + 1] = kHex[hash[i] & 0x0f];
     }
+    const char *hash_hex = hash_hex_override != nullptr
+                               ? hash_hex_override
+                               : hash_hex_buffer.data();
 
     std::array<char, 1024> err_string{};
     std::array<char, 1024> sig_r{};
@@ -217,7 +221,7 @@ static void sign_and_verify(sgx_enclave_id_t eid, uint8_t *encrypted_key,
     int result = 0;
     sgx_status_t transport = trustedEcdsaSign(
         eid, &result, err_string.data(), encrypted_key, encrypted_len,
-        hash_hex.data(), sig_r.data(), sig_s.data(), &sig_v, 16);
+        hash_hex, sig_r.data(), sig_s.data(), &sig_v, 16);
     checked_call("trustedEcdsaSign", transport, result);
 
     if (sig_v > 3)
@@ -227,6 +231,91 @@ static void sign_and_verify(sgx_enclave_id_t eid, uint8_t *encrypted_key,
         fail("trustedEcdsaSign: malformed hexadecimal signature");
     if (!verify_signature(pub_x, pub_y, hash, sig_r.data(), sig_s.data()))
         fail("trustedEcdsaSign: host ECDSA verification failed");
+}
+
+// ECDSA cases from tests/integration/keys/ECDSAIntegrationTests.cpp.
+static constexpr char kTestHashHex[] =
+    "3F891FDA3704F0368DAB65FA81EBE616F4AA2A0854995DA4DC0B59D2CADBD64F";
+
+static uint8_t hex_value(char c)
+{
+    if (c >= '0' && c <= '9')
+        return static_cast<uint8_t>(c - '0');
+    if (c >= 'a' && c <= 'f')
+        return static_cast<uint8_t>(c - 'a' + 10);
+    if (c >= 'A' && c <= 'F')
+        return static_cast<uint8_t>(c - 'A' + 10);
+    fail("invalid hexadecimal digit in test hash");
+}
+
+static std::array<uint8_t, 32> decode_hash_hex(const char *hex)
+{
+    require_hex64("test hash", hex);
+    std::array<uint8_t, 32> hash{};
+    for (size_t i = 0; i < hash.size(); ++i)
+        hash[i] = static_cast<uint8_t>((hex_value(hex[i * 2]) << 4) |
+                                       hex_value(hex[i * 2 + 1]));
+    return hash;
+}
+
+static void test_keygen_and_sign(sgx_enclave_id_t eid)
+{
+    std::array<char, 1024> err_string{};
+    std::array<uint8_t, 1024> encrypted_key{};
+    std::array<char, 1024> pub_x{};
+    std::array<char, 1024> pub_y{};
+    uint64_t encrypted_len = 0;
+    int exportable = 0;
+    int result = 0;
+
+    sgx_status_t transport = trustedGenerateEcdsaKey(
+        eid, &result, err_string.data(), &exportable, encrypted_key.data(),
+        &encrypted_len, pub_x.data(), pub_y.data());
+    checked_call("trustedGenerateEcdsaKey", transport, result);
+    if (encrypted_len == 0 || encrypted_len > encrypted_key.size())
+        fail("trustedGenerateEcdsaKey: invalid encrypted length");
+    require_hex64("pub_key_x", pub_x.data());
+    require_hex64("pub_key_y", pub_y.data());
+
+    const auto hash = decode_hash_hex(kTestHashHex);
+    for (int i = 0; i < 50; ++i)
+        sign_and_verify(eid, encrypted_key.data(), encrypted_len, pub_x.data(),
+                        pub_y.data(), hash, kTestHashHex);
+}
+
+static void test_public_key(sgx_enclave_id_t eid)
+{
+    std::array<char, 1024> err_string{};
+    std::array<uint8_t, 1024> encrypted_key{};
+    std::array<char, 1024> pub_x{};
+    std::array<char, 1024> pub_y{};
+    uint64_t encrypted_len = 0;
+    int exportable = 0;
+    int result = 0;
+
+    sgx_status_t transport = trustedGenerateEcdsaKey(
+        eid, &result, err_string.data(), &exportable, encrypted_key.data(),
+        &encrypted_len, pub_x.data(), pub_y.data());
+    checked_call("trustedGenerateEcdsaKey", transport,
+                 result);
+    if (encrypted_len == 0 || encrypted_len > encrypted_key.size())
+        fail("trustedGenerateEcdsaKey: invalid encrypted length");
+
+    std::array<char, 1024> received_pub_x{};
+    std::array<char, 1024> received_pub_y{};
+    transport = trustedGetPublicEcdsaKey(
+        eid, &result, err_string.data(), encrypted_key.data(), encrypted_len,
+        received_pub_x.data(), received_pub_y.data());
+    checked_call("trustedGetPublicEcdsaKey", transport, result);
+    if (std::strcmp(received_pub_x.data(), pub_x.data()) != 0 ||
+        std::strcmp(received_pub_y.data(), pub_y.data()) != 0)
+        fail("trustedGetPublicEcdsaKey: public key changed");
+}
+
+static void run_self_tests(sgx_enclave_id_t eid)
+{
+    test_keygen_and_sign(eid);
+    test_public_key(eid);
 }
 
 static void expect_sign_rejection(sgx_enclave_id_t eid,
@@ -264,11 +353,13 @@ static uint64_t parse_positive(const char *text, const char *name)
 
 struct Options {
     uint64_t requests = 1001;
+    bool self_test = false;
 };
 
 static void usage(const char *program)
 {
-    std::fprintf(stderr, "usage: %s [--requests N]\n", program);
+    std::fprintf(stderr,
+                 "usage: %s [--requests N] [--self-test]\n", program);
 }
 
 static Options parse_options(int argc, char **argv)
@@ -277,6 +368,8 @@ static Options parse_options(int argc, char **argv)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--requests") == 0 && i + 1 < argc) {
             options.requests = parse_positive(argv[++i], "--requests");
+        } else if (std::strcmp(argv[i], "--self-test") == 0) {
+            options.self_test = true;
         } else {
             usage(argv[0]);
             throw Failure{};
@@ -309,6 +402,14 @@ static int run(const Options &options)
     explicit_bzero(backup.data(), backup.size());
     if (sealed_len == 0 || sealed_len > sealed_sek.size())
         fail("trustedGenerateSEK: invalid sealed length");
+
+    if (options.self_test) {
+        run_self_tests(eid);
+        checked_transport("trustedEnclaveClear", trustedEnclaveClear(eid));
+        enclave.destroy();
+        std::printf("sgxwallet self-test: PASS\n");
+        return 0;
+    }
 
     int exportable = 0;
     transport = trustedGenerateEcdsaKey(

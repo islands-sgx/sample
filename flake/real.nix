@@ -4,7 +4,6 @@ let
   sgxSsl = mode: pkgs.callPackage ./package/sgxssl.nix {
     inherit (toolchain) stdenv;
     llvmTools = toolchain.atfieldLlc;
-    enclaveCompiler = toolchain.enclaveCompiler;
     implementTools = toolchain.implementTools;
     sgxSdk = sgx.sdk;
     inherit mode;

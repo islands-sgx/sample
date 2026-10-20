@@ -4,7 +4,8 @@ index 7d913a7..a2a814f 100644
 +++ b/core/Enclave/enclave_hsm.cpp
 @@ -31,6 +31,8 @@
  
- #include "enclave_hsm_t.h"
+-#include "enclave_hsm_t.h"
++#include "enclave_t.h"
  
 +#include <string.h>
 +

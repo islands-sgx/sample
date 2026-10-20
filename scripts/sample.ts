@@ -112,6 +112,7 @@ function buildSample(sample: Sample): void {
   ensureNixShell(sample);
   const tool = requireVariables([
     "ATFIELD_CC", "ATFIELD_CXX", "ATFIELD_LLD", "ATFIELD_AR", "ATFIELD_RANLIB", "ATFIELD_NM",
+    "ATFIELD_IMPLEMENT_ROOT", "ATFIELD_CMAKE_MODULE",
     "ATFIELD_OBJCOPY", "ATFIELD_READELF", "ATFIELD_LLC", "SGX_SDK_ROOT", "SGX_PSW_ROOT",
     "SGX_TRUSTED_LIB_ROOT",
   ]);
@@ -159,9 +160,9 @@ function buildSample(sample: Sample): void {
     `-DCMAKE_NM=${tool.ATFIELD_NM}`, `-DCMAKE_OBJCOPY=${tool.ATFIELD_OBJCOPY}`,
     `-DCMAKE_READELF=${tool.ATFIELD_READELF}`, "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     `-DATFIELD_GROUP=${sample.group}`, `-DATFIELD_SAMPLE=${sample.name}`, `-DATFIELD_MODE=${sample.mode}`,
-    `-DATFIELD_IMPLEMENT_ROOT=${process.env.ATFIELD_IMPLEMENT_ROOT ?? ""}`,
-    `-DATFIELD_LLC=${tool.ATFIELD_LLC}`, `-DATFIELD_UPSTREAM_SOURCE_ROOT=${process.env.ATFIELD_UPSTREAM_SOURCE_ROOT ?? ""}`,
-    `-DATFIELD_UPSTREAM_PACKAGE=${process.env.ATFIELD_UPSTREAM_PACKAGE ?? ""}`,
+    `-DATFIELD_IMPLEMENT_ROOT=${tool.ATFIELD_IMPLEMENT_ROOT}`,
+    `-DATFIELD_CMAKE_MODULE=${tool.ATFIELD_CMAKE_MODULE}`,
+    `-DATFIELD_LLC=${tool.ATFIELD_LLC}`,
     `-DATFIELD_TEST_SIGNING_KEY=${join(projectRoot, "build", "test-signing-key.pem")}`,
     `-DSGX_ENCLAVE_CLANG=${tool.SGX_ENCLAVE_CLANG}`, `-DSGX_SDK_ROOT=${tool.SGX_SDK_ROOT}`,
     `-DSGX_PSW_ROOT=${tool.SGX_PSW_ROOT}`, `-DSGX_TRUSTED_LIB_ROOT=${tool.SGX_TRUSTED_LIB_ROOT}`,

@@ -9,7 +9,6 @@
   writeTextDir,
   stdenv,
   llvmTools,
-  enclaveCompiler,
   implementTools,
   sgxSdk,
   mode,

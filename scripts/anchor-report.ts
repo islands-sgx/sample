@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -247,6 +246,14 @@ export function render(rows: readonly {
       `${r.pagesWithoutC3Candidate.length} | ${r.pagesWithoutNamedAnchor.length} | ${r.namedNaturalAnchors} | ${r.namedConstructedAnchors} |`)).join("\n");
 }
 
+export function validateCurrentRun(
+  name: string, mode: "raw" | "anchor", runBytes: Buffer, signed: Buffer, host: Buffer,
+) {
+  const run = JSON.parse(runBytes.toString());
+  requireThat(run.exitCode === 0 && run.imageSha256 === hash(signed) &&
+    run.hostSha256 === hash(host), name + "/" + mode + ": missing successful current-artifact run");
+}
+
 async function inspectPair(root: string, group: "anchor" | "real", name: string) {
   const pair = [];
   for (const mode of ["raw", "anchor"] as const) {
@@ -254,9 +261,7 @@ async function inspectPair(root: string, group: "anchor" | "real", name: string)
     const [bytes, signed, host, commands, runBytes] = await Promise.all(
       ["enclave.so", "enclave.signed.so", "host", "compile_commands.json", "run.json"]
         .map(file => readFile(resolve(dir, file))));
-    const run = JSON.parse(runBytes.toString());
-    requireThat(run.exitCode === 0 && run.imageSha256 === hash(signed) &&
-      run.hostSha256 === hash(host), `${name}/${mode}: missing successful current-artifact run`);
+    validateCurrentRun(name, mode, runBytes, signed, host);
     const image = new Elf(bytes), signedImage = new Elf(signed);
     requireThat(image.executable.length === signedImage.executable.length,
       `${name}/${mode}: signing changed executable mappings`);
@@ -284,24 +289,39 @@ async function inspectPair(root: string, group: "anchor" | "real", name: string)
   };
 }
 
-async function main() {
-  const root = resolve(process.argv[2] ?? "build");
+export async function generateReport(
+  root: string, includeReal = false, inspectSample: typeof inspectPair = inspectPair,
+) {
+  root = resolve(root);
   const rows = [];
   for (const name of anchorSamples) {
-    rows.push(await inspectPair(root, "anchor", name));
+    rows.push(await inspectSample(root, "anchor", name));
   }
-  const realReady = realSamples.every(name =>
-    (["raw", "anchor"] as const).every(mode =>
-      existsSync(resolve(root, "real", name, mode, "run.json"))));
-  if (realReady) {
+  if (includeReal) {
     for (const name of realSamples) {
-      rows.push(await inspectPair(root, "real", name));
+      rows.push(await inspectSample(root, "real", name));
     }
   }
   const table = render(rows);
   await mkdir(resolve(root, "anchor"), { recursive: true });
   await writeFile(resolve(root, "anchor", "results.json"), JSON.stringify({ pageBytes: PAGE, samples: rows }, null, 2) + "\n");
   await writeFile(resolve(root, "anchor", "comparison.md"), table + "\n");
+  return { rows, table };
+}
+
+export async function main(args = process.argv.slice(2)) {
+  let root = "build", includeReal = false, sawRoot = false;
+  for (const arg of args) {
+    if (arg === "--include-real") {
+      includeReal = true;
+    } else if (!arg.startsWith("-") && !sawRoot) {
+      root = arg;
+      sawRoot = true;
+    } else {
+      throw new Error(`unexpected anchor-report argument: ${arg}`);
+    }
+  }
+  const { table } = await generateReport(root, includeReal);
   console.log(table);
 }
 

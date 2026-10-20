@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #include "sabd.h"
+#include "enclave_t.h"
 #include "sgx_error.h"
 
 #ifndef SABD_MAX_HASH_TABLE_ORDER

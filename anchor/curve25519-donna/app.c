@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "Enclave_u.h"
+#include "enclave_u.h"
 #include "sgx_urts.h"
 
 #ifndef ENCLAVE_PATH

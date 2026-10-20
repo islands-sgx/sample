@@ -40,6 +40,13 @@ set(ATFIELD_TEST_SIGNING_KEY
     "${CMAKE_SOURCE_DIR}/build/test-signing-key.pem"
     CACHE PATH "Shared SGX test-signing key")
 
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SgxEnclave.cmake")
+if(NOT DEFINED ATFIELD_CMAKE_MODULE OR ATFIELD_CMAKE_MODULE STREQUAL "")
+  if(DEFINED ENV{ATFIELD_CMAKE_MODULE})
+    set(ATFIELD_CMAKE_MODULE "$ENV{ATFIELD_CMAKE_MODULE}")
+  else()
+    message(FATAL_ERROR "ATFIELD_CMAKE_MODULE must point to the implement CMake module")
+  endif()
+endif()
+include("${ATFIELD_CMAKE_MODULE}")
 sgx_find_sdk()
 add_subdirectory("${ATFIELD_GROUP}/${ATFIELD_SAMPLE}")

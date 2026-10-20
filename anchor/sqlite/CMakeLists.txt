@@ -1,6 +1,6 @@
 sgx_add_sample(
   NAME sqlite
-  EDL Enclave.edl
+  EDL enclave.edl
   PROFILE PRERELEASE
   SOURCES enclave.c vendor/sqlite3.c
   HOST_SOURCES app.c)

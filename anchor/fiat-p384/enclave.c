@@ -1,5 +1,5 @@
 /* Expose fiat-crypto P-384 field operations through ECALLs. */
-#include "Enclave_t.h"
+#include "enclave_t.h"
 
 #include <stdint.h>
 #include <string.h>

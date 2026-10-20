@@ -1,5 +1,5 @@
 /* Expose Adam Langley's X25519 implementation as a raw RFC 7748 primitive. */
-#include "Enclave_t.h"
+#include "enclave_t.h"
 
 #include <curve25519-donna.h>
 #include <stdint.h>

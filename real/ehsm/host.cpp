@@ -18,11 +18,11 @@
 #include <unistd.h>
 
 #ifdef ATFIELD_PROTECT
-#include "../../common/atfield_readiness_host.h"
+#include <atfield_readiness_host.h>
 #endif
 
 #include "datatypes.h"
-#include "enclave_hsm_u.h"
+#include "enclave_u.h"
 #include "sgxssl_cpu_profile.h"
 
 #ifndef ENCLAVE_PATH
@@ -212,10 +212,19 @@ static void fill_data(Data &data, uint8_t seed)
         data.get()->data[i] = static_cast<uint8_t>(seed + i * 31U);
 }
 
-Key create_key(sgx_enclave_id_t eid)
+static Data data_from_bytes(const char *bytes, size_t length)
+{
+    Data data = data_buffer(length);
+    if (length != 0)
+        std::memcpy(data.get()->data, bytes, length);
+    return data;
+}
+
+Key create_key(sgx_enclave_id_t eid,
+               ehsm_keyspec_t keyspec = EH_AES_GCM_256)
 {
     Key key(0);
-    key.get()->metadata.keyspec = EH_AES_GCM_256;
+    key.get()->metadata.keyspec = keyspec;
     key.get()->metadata.origin = EH_INTERNAL_KEY;
     key.get()->metadata.keyusage = EH_KEYUSAGE_ENCRYPT_DECRYPT;
     key.get()->keybloblen = 0;
@@ -284,17 +293,101 @@ static void reject_plaintext_length(sgx_enclave_id_t eid, Key &key, Data &aad,
     expected_invalid_parameter("encrypt length", transport, result);
 }
 
+// AES-GCM cases from core/Test/function_test.cpp.
+static void test_aes_gcm_roundtrip(sgx_enclave_id_t eid)
+{
+    static const char *plaintexts[] = {
+        "Test1234-AES128",
+        "Test1234-AES192",
+        "Test1234-AES256",
+    };
+    static const ehsm_keyspec_t keyspecs[] = {
+        EH_AES_GCM_128,
+        EH_AES_GCM_192,
+        EH_AES_GCM_256,
+    };
+    Data aad = data_from_bytes("challenge", sizeof("challenge"));
+
+    for (size_t i = 0; i < sizeof(keyspecs) / sizeof(keyspecs[0]); i++) {
+        Data plain = data_from_bytes(plaintexts[i], std::strlen(plaintexts[i]));
+        Key key = create_key(eid, keyspecs[i]);
+        Data cipher = encrypt(eid, key, aad, plain);
+        Data restored = decrypt(eid, key, aad, cipher);
+        require_equal("AES-GCM with AAD", restored, plain);
+    }
+}
+
+static void test_aes_gcm_zero_byte_aad(
+    sgx_enclave_id_t eid)
+{
+    static const char *plaintexts[] = {
+        "Test1234-AES128",
+        "Test1234-AES192",
+        "Test1234-AES256",
+    };
+    static const ehsm_keyspec_t keyspecs[] = {
+        EH_AES_GCM_128,
+        EH_AES_GCM_192,
+        EH_AES_GCM_256,
+    };
+    // The original empty-string case includes its terminating NUL byte.
+    Data aad = data_from_bytes("", sizeof(""));
+
+    for (size_t i = 0; i < sizeof(keyspecs) / sizeof(keyspecs[0]); i++) {
+        Data plain = data_from_bytes(plaintexts[i], std::strlen(plaintexts[i]));
+        Key key = create_key(eid, keyspecs[i]);
+        Data cipher = encrypt(eid, key, aad, plain);
+        Data restored = decrypt(eid, key, aad, cipher);
+        require_equal("AES-GCM zero-byte AAD", restored, plain);
+    }
+}
+
+static void test_data_key(sgx_enclave_id_t eid)
+{
+    Key key = create_key(eid, EH_AES_GCM_128);
+    Data aad = data_from_bytes("challenge", sizeof("challenge"));
+    Data datakey_plain = data_buffer(16);
+    Data datakey_cipher = data_buffer(0);
+    sgx_status_t result = SGX_ERROR_UNEXPECTED;
+    sgx_status_t transport = enclave_generate_datakey(
+        eid, &result, key.get(), key.size(), aad.get(), aad.size(),
+        datakey_plain.get(), datakey_plain.size(), datakey_cipher.get(),
+        datakey_cipher.size());
+    checked("generate_datakey size", transport, result);
+
+    datakey_cipher.resize(datakey_cipher.get()->datalen);
+    transport = enclave_generate_datakey(
+        eid, &result, key.get(), key.size(), aad.get(), aad.size(),
+        datakey_plain.get(), datakey_plain.size(), datakey_cipher.get(),
+        datakey_cipher.size());
+    checked("generate_datakey", transport, result);
+
+    Data restored = decrypt(eid, key, aad, datakey_cipher);
+    require_equal("generate_datakey plaintext", restored,
+                  datakey_plain);
+}
+
+static void run_self_tests(sgx_enclave_id_t eid)
+{
+    test_aes_gcm_roundtrip(eid);
+    test_aes_gcm_zero_byte_aad(eid);
+    test_data_key(eid);
+    std::puts("eHSM self-test: PASS");
+}
+
 struct Options {
     size_t bytes = 32;
     size_t requests = 2;
     std::string domain_key = "domain-key.sealed";
+    bool self_test = false;
     bool help = false;
 };
 
 static void usage(const char *program)
 {
     std::fprintf(stderr,
-                 "usage: %s [--bytes N] [--requests N] [--domain-key PATH]\n",
+                 "usage: %s [--bytes N] [--requests N] [--domain-key PATH] "
+                 "[--self-test]\n",
                  program);
 }
 
@@ -323,6 +416,10 @@ static bool parse_options(int argc, char **argv, Options *options)
             options->help = true;
             usage(argv[0]);
             return true;
+        }
+        if (std::strcmp(argv[i], "--self-test") == 0) {
+            options->self_test = true;
+            continue;
         }
         if (std::strcmp(argv[i], "--domain-key") == 0) {
             if (++i >= argc || argv[i][0] == '\0') {
@@ -380,6 +477,12 @@ static int run(const Options &options)
         sgx_status_t transport =
             enclave_get_domain_key_from_local(enclave.id(), &result);
         checked("domain key", transport, result);
+
+        if (options.self_test) {
+            run_self_tests(enclave.id());
+            checked("destroy enclave", enclave.close(), SGX_SUCCESS);
+            return 0;
+        }
 
         key = create_key(enclave.id());
         for (size_t request = 0; request < options.requests; request++) {

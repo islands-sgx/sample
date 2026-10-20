@@ -42,44 +42,27 @@
         "qe3"
         "sgxwallet"
         "signal-cds"
-        "sqlite"
       ];
       anchorModes = [ "raw" "anchor" ];
       realModes = [ "raw" "anchor" "protect" ];
-      upstreamEnv = {
+      sourceEnv = {
         qe3 = {
-          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.qe3}";
-          ATFIELD_UPSTREAM_PACKAGE = real.sources.qe3.name;
           QE3_SOURCE_ROOT = "${real.sources.qe3}";
         };
         ehsm = {
-          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.ehsm}";
-          ATFIELD_UPSTREAM_PACKAGE = real.sources.ehsm.name;
           EHSM_SOURCE_ROOT = "${real.sources.ehsm}";
         };
         ehsm-opt-1 = {
-          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.ehsmOpt1}";
-          ATFIELD_UPSTREAM_PACKAGE = real.sources.ehsmOpt1.name;
           EHSM_SOURCE_ROOT = "${real.sources.ehsmOpt1}";
         };
         ehsm-opt-2 = {
-          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.ehsmOpt2}";
-          ATFIELD_UPSTREAM_PACKAGE = real.sources.ehsmOpt2.name;
           EHSM_SOURCE_ROOT = "${real.sources.ehsmOpt2}";
         };
         sgxwallet = {
-          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.sgxwallet}";
-          ATFIELD_UPSTREAM_PACKAGE = real.sources.sgxwallet.name;
           SGXWALLET_SOURCE_ROOT = "${real.sources.sgxwallet}";
         };
         signal-cds = {
-          ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.signalCds}";
-          ATFIELD_UPSTREAM_PACKAGE = real.sources.signalCds.name;
           SIGNAL_CDS_SOURCE_ROOT = "${real.sources.signalCds}";
-        };
-        sqlite = {
-          ATFIELD_UPSTREAM_SOURCE_ROOT = "${./anchor/sqlite/vendor}";
-          ATFIELD_UPSTREAM_PACKAGE = "sqlite-amalgamation";
         };
       };
       mkSampleShell =
@@ -117,7 +100,6 @@
             toolchain.implementTools;
           protectEnv = lib.optionalAttrs (mode == "protect") {
             ATFIELD_FIELD_TOOL = "${implementRoot}/bin/atfield-field";
-            ATFIELD_IMPLEMENT_ROOT = implementRoot;
           };
         in
         (pkgs.mkShell.override { stdenv = toolchain.stdenv; }) {
@@ -142,6 +124,8 @@
           env = {
             ATFIELD_ANCHOR_PREPARATION = if mode == "raw" then "0" else "1";
             ATFIELD_FIELD_BOUNDARY = if mode == "protect" then "1" else "0";
+            ATFIELD_CMAKE_MODULE = "${implementRuntime}/cmake/SgxEnclave.cmake";
+            ATFIELD_IMPLEMENT_ROOT = "${implementRuntime}";
             ATFIELD_AR = "${toolchain.atfieldLlc}/bin/llvm-ar";
             ATFIELD_CC = "${toolchain.stdenv.cc}/bin/cc";
             ATFIELD_CXX = "${toolchain.stdenv.cc}/bin/c++";
@@ -182,7 +166,7 @@
             SGX_MCL_ROOT = "${real.libraries.mcl.${libraryMode}}";
           }
           // protectEnv
-          // lib.optionalAttrs (group == "real") upstreamEnv.${name};
+          // lib.optionalAttrs (group == "real") sourceEnv.${name};
         };
       sampleShells = lib.listToAttrs (
         lib.concatMap (

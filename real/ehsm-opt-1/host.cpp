@@ -18,11 +18,11 @@
 #include <unistd.h>
 
 #ifdef ATFIELD_PROTECT
-#include "../../common/atfield_readiness_host.h"
+#include <atfield_readiness_host.h>
 #endif
 
 #include "datatypes.h"
-#include "enclave_hsm_u.h"
+#include "enclave_u.h"
 #include "sgxssl_cpu_profile.h"
 
 #ifndef ENCLAVE_PATH

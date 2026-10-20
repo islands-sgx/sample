@@ -1,5 +1,5 @@
 /* SQLITE_OS_OTHER=1 with a heap-backed VFS for in-memory SQL. */
-#include "Enclave_t.h"
+#include "enclave_t.h"
 
 #include <stdint.h>
 #include <string.h>

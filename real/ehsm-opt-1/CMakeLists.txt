@@ -8,11 +8,10 @@ set(_EHSM_LOG_INCLUDE_DIRECTORY "${EHSM_SOURCE_ROOT}/utils/log4cplus")
 
 sgx_add_sample(
   NAME ehsm-opt-1
-  EDL "${CMAKE_CURRENT_SOURCE_DIR}/enclave_hsm.edl"
+  EDL "${CMAKE_CURRENT_SOURCE_DIR}/enclave.edl"
   CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/Enclave.config.xml"
   PROTECT_HEAP 0x400000
   PROTECT_STACK 0x40000
-  PROTECT_Q 0x17000
   SOURCES
     "${_EHSM_SOURCE_DIRECTORY}/enclave_hsm.cpp"
     "${_EHSM_SOURCE_DIRECTORY}/key_factory.cpp"
