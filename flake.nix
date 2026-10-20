@@ -42,6 +42,7 @@
         "qe3"
         "sgxwallet"
         "signal-cds"
+        "sqlite"
       ];
       anchorModes = [ "raw" "anchor" ];
       realModes = [ "raw" "anchor" "protect" ];
@@ -75,6 +76,10 @@
           ATFIELD_UPSTREAM_SOURCE_ROOT = "${real.sources.signalCds}";
           ATFIELD_UPSTREAM_PACKAGE = real.sources.signalCds.name;
           SIGNAL_CDS_SOURCE_ROOT = "${real.sources.signalCds}";
+        };
+        sqlite = {
+          ATFIELD_UPSTREAM_SOURCE_ROOT = "${./anchor/sqlite/vendor}";
+          ATFIELD_UPSTREAM_PACKAGE = "sqlite-amalgamation";
         };
       };
       mkSampleShell =

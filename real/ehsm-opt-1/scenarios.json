@@ -31,16 +31,29 @@
   ],
   "coupled_struct_constraints": [
     {
-      "constraint_id": "ehsm_sm4_keyblob_producer_tuple",
+      "constraint_id": "ehsm_sm4_ctr_keyblob_producer",
       "ecall_index": 1,
       "selector_seq": 0,
       "struct_type": "ehsm_keyblob_t",
-      "description": "Coupled 3-field producer constraint for SM4-CBC key creation in enclave_create_key(cmk, cmk_size): cmk->metadata.keyspec (offset 4, u32) = 20 (EH_SM4_CBC), cmk->keybloblen (offset 12, u32) = 64, and outer scalar cmk_size (param 1) = 80.",
+      "description": "Coupled struct-field & size constraint on enclave_create_key(cmk, cmk_size): set cmk->metadata.keyspec (offset 0, u32) = 31 (EH_SM4_CTR), cmk->keybloblen (offset 40, u32) = 80, and cmk_size (param 1) = 124 so the sealed SM4 keyblob is accepted by subsequent host consumer calls.",
       "manual_declaration_lines": 6,
       "coupled_ops": [
-        "f:0:4:4:20",
-        "f:0:12:4:64",
-        "s:1:80"
+        "f:0:0:4:31",
+        "f:0:40:4:80",
+        "s:1:124"
+      ]
+    },
+    {
+      "constraint_id": "ehsm_sm4_cbc_keyblob_producer",
+      "ecall_index": 1,
+      "selector_seq": 0,
+      "struct_type": "ehsm_keyblob_t",
+      "description": "Coupled 3-field struct constraint on enclave_create_key(cmk, cmk_size) for EH_SM4_CBC (32): cmk->metadata.keyspec (offset 0, u32) = 32, cmk->keybloblen (offset 40, u32) = 64, cmk_size (param 1) = 108.",
+      "manual_declaration_lines": 6,
+      "coupled_ops": [
+        "f:0:0:4:32",
+        "f:0:40:4:64",
+        "s:1:108"
       ]
     }
   ],

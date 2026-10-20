@@ -1,0 +1,21 @@
+enclave {
+  trusted {
+    public sgx_status_t ecall_db_open(
+      int page_mode,
+      [out] int *out_db_id);
+    public sgx_status_t ecall_db_exec_batch(
+      int db_id,
+      int op_mode,
+      [in, count=row_count] const int *row_ids,
+      [in, count=row_count] const int *row_vals,
+      size_t row_count,
+      [out] int *out_affected);
+    public sgx_status_t ecall_db_query_stats(
+      int db_id,
+      int query_mode,
+      int filter_grp,
+      [out] int *out_count,
+      [out] long *out_sum,
+      [out] long *out_metric);
+  };
+};
