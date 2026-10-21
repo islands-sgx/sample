@@ -330,7 +330,6 @@ static void test_aes_gcm_zero_byte_aad(
         EH_AES_GCM_192,
         EH_AES_GCM_256,
     };
-    // The original empty-string case includes its terminating NUL byte.
     Data aad = data_from_bytes("", sizeof(""));
 
     for (size_t i = 0; i < sizeof(keyspecs) / sizeof(keyspecs[0]); i++) {

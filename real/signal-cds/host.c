@@ -20,6 +20,7 @@
 #endif
 
 #define SABD_MAX_ADDRESS_BOOK_IDS ((size_t)1 << 13)
+#define SABD_MAX_IN_JIDS ((size_t)10000)
 
 typedef struct {
     size_t records;
@@ -99,6 +100,7 @@ static bool parse_options(int argc, char **argv, options_t *options)
         if (strcmp(argv[i], "--in-jids") == 0 && i + 1 < argc) {
             if (!parse_size(argv[++i], &options->in_jids) ||
                 options->in_jids == 0 ||
+                options->in_jids > SABD_MAX_IN_JIDS ||
                 options->in_jids > SIZE_MAX / sizeof(jid_t) ||
                 options->in_jids > SIZE_MAX / 2) {
                 usage(argv[0]);
@@ -130,6 +132,7 @@ static bool parse_options(int argc, char **argv, options_t *options)
     }
 
     if (options->queries > SABD_MAX_ADDRESS_BOOK_IDS ||
+        options->records > SABD_MAX_IN_JIDS ||
         options->records > SIZE_MAX / sizeof(jid_t) ||
         options->queries > SIZE_MAX / sizeof(jid_t)) {
         usage(argv[0]);
@@ -277,7 +280,7 @@ static int check_boundary(sgx_enclave_id_t enclave_id)
 }
 
 
-/* Lookup cases from enclave/src/sabd-enclave-test.c. */
+// Lookup cases from enclave/src/sabd-enclave-test.c.
 static int check_lookup_result(
     sgx_enclave_id_t enclave_id,
     const jid_t *test_in_jids,
@@ -341,7 +344,7 @@ static int run_self_tests(sgx_enclave_id_t enclave_id, long int seed, size_t in_
     }
 
     int failed = 0;
-    /* 1. test_sabd_lookup_batch_too_large: ab_jid_count = (1 << 14) + 1 -> SGX_ERROR_INVALID_PARAMETER */
+    /* 1a. test_sabd_lookup_batch_too_large: ab_jid_count = (1 << 14) + 1 -> SGX_ERROR_INVALID_PARAMETER */
     {
         uint32_t too_large = (1U << 14) + 1U;
         jid_t *ab_big = (jid_t *)calloc(too_large, sizeof(jid_t));
@@ -351,6 +354,17 @@ static int run_self_tests(sgx_enclave_id_t enclave_id, long int seed, size_t in_
         if (st != SGX_SUCCESS || encl_ret != SGX_ERROR_INVALID_PARAMETER) failed = 1;
         free(ab_big);
         free(res_big);
+    }
+
+    /* 1b. test_sabd_lookup_in_jids_too_large: in_jid_count = SABD_MAX_IN_JIDS + 1 -> SGX_ERROR_INVALID_PARAMETER */
+    if (!failed) {
+        size_t in_too_large = SABD_MAX_IN_JIDS + 1U;
+        jid_t *in_big = (jid_t *)calloc(in_too_large, sizeof(jid_t));
+        uint8_t res_one = 0;
+        sgx_status_t encl_ret = SGX_SUCCESS;
+        sgx_status_t st = ecall_lookup_hash(enclave_id, &encl_ret, in_big, in_too_large, test_ab_jids, 1U, &res_one);
+        if (st != SGX_SUCCESS || encl_ret != SGX_ERROR_INVALID_PARAMETER) failed = 1;
+        free(in_big);
     }
 
     /* 2. test_sabd_lookup_many_duplicates (2048 queries, even indices duplicated) */
@@ -393,6 +407,26 @@ static int run_self_tests(sgx_enclave_id_t enclave_id, long int seed, size_t in_
     /* 6. test_sabd_lookup_large (ab_jid_count = 2048) */
     if (!failed) {
         failed = check_lookup_result(enclave_id, test_in_jids, in_jid_count, test_ab_jids, test_ab_jid_count, test_expected);
+    }
+
+    /* 7. test_sabd_lookup_max_contract_boundary (ab_jid_count = SABD_MAX_ADDRESS_BOOK_IDS = 8192) */
+    if (!failed) {
+        const uint32_t max_ab = (uint32_t)SABD_MAX_ADDRESS_BOOK_IDS;
+        jid_t *ab_max = (jid_t *)calloc(max_ab, sizeof(jid_t));
+        uint8_t *exp_max = (uint8_t *)calloc(max_ab, 1);
+        if (!ab_max || !exp_max) {
+            free(ab_max);
+            free(exp_max);
+            failed = 1;
+        } else {
+            for (uint32_t i = 0; i < max_ab; i++) {
+                ab_max[i] = test_ab_jids[i % test_ab_jid_count];
+                exp_max[i] = test_expected[i % test_ab_jid_count];
+            }
+            failed = check_lookup_result(enclave_id, test_in_jids, in_jid_count, ab_max, max_ab, exp_max);
+            free(ab_max);
+            free(exp_max);
+        }
     }
 
     free(test_in_jids);

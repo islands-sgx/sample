@@ -1,0 +1,27 @@
+diff --git a/secure_enclave/secure_enclave.c b/secure_enclave/secure_enclave.c
+index 55a3e36..e827dda 100644
+--- a/secure_enclave/secure_enclave.c
++++ b/secure_enclave/secure_enclave.c
+@@ -977,6 +977,8 @@ void trustedGetPublicEcdsaKey(int *errStatus, char *errString,
+     CHECK_STATE(encryptedPrivateKey);
+     CHECK_STATE(pub_key_x);
+     CHECK_STATE(pub_key_y);
++    CHECK_STATE(enc_len >= SGX_AESGCM_MAC_SIZE + SGX_AESGCM_IV_SIZE &&
++                enc_len <= ENCLAVE_BUF_LEN);
+ 
+     get_public_ecdsa_key_field(errStatus, errString, encryptedPrivateKey,
+                                enc_len, pub_key_x, pub_key_y);
+@@ -1080,6 +1082,13 @@ void trustedEcdsaSign(int *errStatus, char *errString, uint8_t *encryptedPrivate
+     CHECK_STATE(hash);
+     CHECK_STATE(sigR);
+     CHECK_STATE(sigS);
++    CHECK_STATE(enc_len >= SGX_AESGCM_MAC_SIZE + SGX_AESGCM_IV_SIZE &&
++                enc_len <= ENCLAVE_BUF_LEN);
++    CHECK_STATE(base >= 2 && base <= 32);
++    {
++        size_t hash_len = strnlen(hash, 65);
++        CHECK_STATE(hash_len >= 1 && hash_len <= 64);
++    }
+ 
+     ecdsa_sign_field(errStatus, errString, encryptedPrivateKey, enc_len, hash,
+                      sigR, sigS, sig_v, base);

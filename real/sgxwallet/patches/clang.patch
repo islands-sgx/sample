@@ -268,3 +268,28 @@ index 8ef4ecd..55a3e36 100644
  void trustedDecryptKey(int *errStatus, char *errString, uint8_t *encryptedPrivateKey,
                            uint64_t enc_len, char *key) {
      LOG_DEBUG(__FUNCTION__);
+
+diff --git a/secure_enclave/secure_enclave.c b/secure_enclave/secure_enclave.c
+--- a/secure_enclave/secure_enclave.c
++++ b/secure_enclave/secure_enclave.c
+@@ -40,7 +40,7 @@
+ #include <stdbool.h>
+ #include <assert.h>
+ 
+-#include "secure_enclave_t.h"
++#include "enclave_t.h"
+ #include "sgx_error.h"
+ #include "sgx_tcrypto.h"
+ #include "sgx_tseal.h"
+diff --git a/secure_enclave/EnclaveCommon.cpp b/secure_enclave/EnclaveCommon.cpp
+--- a/secure_enclave/EnclaveCommon.cpp
++++ b/secure_enclave/EnclaveCommon.cpp
+@@ -37,7 +37,7 @@
+ 
+ #include "EnclaveCommon.h"
+ #include "EnclaveConstants.h"
+-#include "secure_enclave_t.h"
++#include "enclave_t.h"
+ 
+ using namespace std;
+ 

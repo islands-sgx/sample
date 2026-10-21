@@ -41,22 +41,34 @@ in
     ehsm = pkgs.applyPatches {
       name = "${sgxSources.ehsm.name}-clang";
       src = sgxSources.ehsm;
-      patches = [ ../real/ehsm/patches/clang.patch ];
+      patches = [
+        ../real/ehsm/patches/clang.patch
+        ../real/ehsm/patches/bounds.patch
+      ];
     };
     ehsmOpt1 = pkgs.applyPatches {
       name = "${sgxSources.ehsm.name}-opt-1-clang";
       src = sgxSources.ehsm;
-      patches = [ ../real/ehsm-opt-1/patches/clang.patch ];
+      patches = [
+        ../real/ehsm-opt-1/patches/clang.patch
+        ../real/ehsm-opt-1/patches/bounds.patch
+      ];
     };
     ehsmOpt2 = pkgs.applyPatches {
       name = "${sgxSources.ehsm.name}-opt-2-clang";
       src = sgxSources.ehsm;
-      patches = [ ../real/ehsm-opt-2/patches/clang.patch ];
+      patches = [
+        ../real/ehsm-opt-2/patches/clang.patch
+        ../real/ehsm-opt-2/patches/bounds.patch
+      ];
     };
     sgxwallet = pkgs.applyPatches {
       name = "${sgxSources.sgxwallet.name}-clang";
       src = sgxSources.sgxwallet;
-      patches = [ ../real/sgxwallet/patches/clang.patch ];
+      patches = [
+        ../real/sgxwallet/patches/clang.patch
+        ../real/sgxwallet/patches/bounds.patch
+      ];
     };
   };
   libraries = {

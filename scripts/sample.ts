@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -143,10 +143,19 @@ function buildSample(sample: Sample): void {
 
   const cachePath = join(buildDir, "CMakeCache.txt");
   if (existsSync(cachePath)) {
-    const cache = readFileSync(cachePath, "utf8");
-    if (!cache.split("\n").includes(`CMAKE_C_COMPILER:FILEPATH=${tool.ATFIELD_CC}`)) {
-      rmSync(cachePath, { force: true });
-      rmSync(join(buildDir, "CMakeFiles"), { recursive: true, force: true });
+    const cacheLines = readFileSync(cachePath, "utf8").split("\n");
+    const wantWorkset = `ATFIELD_FROZEN_WORKSET:UNINITIALIZED=${process.env.ATFIELD_FROZEN_WORKSET ?? ""}`;
+    const wantImpl = `ATFIELD_IMPLEMENT_ROOT:UNINITIALIZED=${tool.ATFIELD_IMPLEMENT_ROOT}`;
+    const wantSdk = `SGX_SDK_ROOT:UNINITIALIZED=${tool.SGX_SDK_ROOT}`;
+    const wantRoots = cmakeArgs.map((arg) => arg.slice(2).replace("=", ":UNINITIALIZED="));
+    if (
+      !cacheLines.includes(`CMAKE_C_COMPILER:FILEPATH=${tool.ATFIELD_CC}`) ||
+      !cacheLines.includes(wantImpl) ||
+      !cacheLines.includes(wantSdk) ||
+      !cacheLines.includes(wantWorkset) ||
+      wantRoots.some((entry) => !cacheLines.includes(entry))
+    ) {
+      rmSync(buildDir, { recursive: true, force: true });
     }
   }
 
@@ -158,7 +167,7 @@ function buildSample(sample: Sample): void {
     `-DCMAKE_C_COMPILER_AR=${tool.ATFIELD_AR}`, `-DCMAKE_C_COMPILER_RANLIB=${tool.ATFIELD_RANLIB}`,
     `-DCMAKE_CXX_COMPILER_AR=${tool.ATFIELD_AR}`, `-DCMAKE_CXX_COMPILER_RANLIB=${tool.ATFIELD_RANLIB}`,
     `-DCMAKE_NM=${tool.ATFIELD_NM}`, `-DCMAKE_OBJCOPY=${tool.ATFIELD_OBJCOPY}`,
-    `-DCMAKE_READELF=${tool.ATFIELD_READELF}`, "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    `-DCMAKE_READELF=${tool.ATFIELD_READELF}`, "-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF",
     `-DATFIELD_GROUP=${sample.group}`, `-DATFIELD_SAMPLE=${sample.name}`, `-DATFIELD_MODE=${sample.mode}`,
     `-DATFIELD_IMPLEMENT_ROOT=${tool.ATFIELD_IMPLEMENT_ROOT}`,
     `-DATFIELD_CMAKE_MODULE=${tool.ATFIELD_CMAKE_MODULE}`,
@@ -166,10 +175,23 @@ function buildSample(sample: Sample): void {
     `-DATFIELD_TEST_SIGNING_KEY=${join(projectRoot, "build", "test-signing-key.pem")}`,
     `-DSGX_ENCLAVE_CLANG=${tool.SGX_ENCLAVE_CLANG}`, `-DSGX_SDK_ROOT=${tool.SGX_SDK_ROOT}`,
     `-DSGX_PSW_ROOT=${tool.SGX_PSW_ROOT}`, `-DSGX_TRUSTED_LIB_ROOT=${tool.SGX_TRUSTED_LIB_ROOT}`,
+    `-DATFIELD_FROZEN_WORKSET=${process.env.ATFIELD_FROZEN_WORKSET ?? ""}`,
     ...cmakeArgs,
   ];
+  const compdbPath = join(buildDir, "compile_commands.json");
+  const prevCompdb = existsSync(compdbPath) ? readFileSync(compdbPath, "utf8") : null;
+  const prevStat = existsSync(compdbPath) ? statSync(compdbPath) : null;
   const configureStatus = run(["cmake", ...configureArgs]);
   if (configureStatus !== 0) process.exit(configureStatus);
+  const compdb = Bun.spawnSync({ cmd: ["ninja", "-C", buildDir, "-t", "compdb"], stdout: "pipe", stderr: "inherit" });
+  if (compdb.exitCode !== 0) process.exit(compdb.exitCode);
+  const compdbEntries = (JSON.parse(new TextDecoder().decode(compdb.stdout)) as Array<Record<string, unknown>>)
+    .filter((entry) => typeof entry.command === "string" && entry.command.trim().length > 0 && String(entry.command).includes(" -c ") && String(entry.command).includes("--cmake-launcher"));
+  const nextCompdb = JSON.stringify(compdbEntries, null, 2) + "\n";
+  writeFileSync(compdbPath, nextCompdb);
+  if (prevCompdb === nextCompdb && prevStat !== null) {
+    utimesSync(compdbPath, prevStat.atime, prevStat.mtime);
+  }
   const buildStatus = run(["cmake", "--build", buildDir, "--parallel"]);
   if (buildStatus !== 0) process.exit(buildStatus);
 }

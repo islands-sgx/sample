@@ -414,3 +414,39 @@ index 0ecdd89..de1e5b9 100644
 +#define log_e(...) ((void)0)
  
  #endif
+
+diff --git a/core/Enclave/key_operation.cpp b/core/Enclave/key_operation.cpp
+--- a/core/Enclave/key_operation.cpp
++++ b/core/Enclave/key_operation.cpp
+@@ -29,7 +29,7 @@
+  *
+  */
+ 
+-#include "enclave_hsm_t.h"
++#include "enclave_t.h"
+ #include "datatypes.h"
+ #include "key_operation.h"
+ #include "key_factory.h"
+diff --git a/core/Enclave/key_factory.cpp b/core/Enclave/key_factory.cpp
+--- a/core/Enclave/key_factory.cpp
++++ b/core/Enclave/key_factory.cpp
+@@ -29,7 +29,7 @@
+  *
+  */
+ 
+-#include "enclave_hsm_t.h"
++#include "enclave_t.h"
+ 
+ #include <type_traits>
+ 
+diff --git a/core/Enclave/openssl_operation.cpp b/core/Enclave/openssl_operation.cpp
+--- a/core/Enclave/openssl_operation.cpp
++++ b/core/Enclave/openssl_operation.cpp
+@@ -29,7 +29,7 @@
+  *
+  */
+ 
+-#include "enclave_hsm_t.h"
++#include "enclave_t.h"
+ #include "elog_utils.h"
+ #include "sgx_tseal.h"

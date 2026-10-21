@@ -1,0 +1,156 @@
+diff --git a/core/Enclave/enclave_hsm.cpp b/core/Enclave/enclave_hsm.cpp
+index 9d61816..ecadcb2 100644
+--- a/core/Enclave/enclave_hsm.cpp
++++ b/core/Enclave/enclave_hsm.cpp
+@@ -204,6 +204,7 @@ sgx_status_t enclave_create_key(ehsm_keyblob_t *cmk, size_t cmk_size)
+ 
+     if (cmk == NULL ||
+         cmk_size != APPEND_SIZE_TO_KEYBLOB_T(cmk->keybloblen) ||
++        cmk->keybloblen > EH_CMK_MAX_SIZE ||
+         (cmk->metadata.origin != EH_EXTERNAL_KEY && cmk->metadata.origin != EH_INTERNAL_KEY) ||
+         (cmk->metadata.keyusage != EH_KEYUSAGE_ENCRYPT_DECRYPT && cmk->metadata.keyusage != EH_KEYUSAGE_SIGN_VERIFY))
+     {
+@@ -216,6 +217,14 @@ sgx_status_t enclave_create_key(ehsm_keyblob_t *cmk, size_t cmk_size)
+         return SGX_SUCCESS;
+     }
+ 
++    {
++        uint32_t expected_blob_len = 0;
++        if (cmk->keybloblen != 0 &&
++            (ehsm_calc_keyblob_size(cmk->metadata.keyspec, expected_blob_len) != SGX_SUCCESS ||
++             cmk->keybloblen < expected_blob_len))
++            return SGX_ERROR_INVALID_PARAMETER;
++    }
++
+     switch (cmk->metadata.keyspec)
+     {
+     case EH_AES_GCM_128:
+@@ -225,12 +234,6 @@ sgx_status_t enclave_create_key(ehsm_keyblob_t *cmk, size_t cmk_size)
+             return SGX_ERROR_UNEXPECTED;
+         if (cmk->keybloblen == 0)
+             return ehsm_calc_keyblob_size(cmk->metadata.keyspec, cmk->keybloblen);
+-        {
+-            uint32_t expected_blob_len = 0;
+-            if (ehsm_calc_keyblob_size(cmk->metadata.keyspec, expected_blob_len) != SGX_SUCCESS ||
+-                cmk->keybloblen < expected_blob_len)
+-                return SGX_ERROR_INVALID_PARAMETER;
+-        }
+         ret = ehsm_create_aes_key(cmk);
+         break;
+     case EH_RSA_2048:
+@@ -384,11 +387,12 @@ sgx_status_t enclave_encrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
+     if (cmk == NULL ||
+         cmk_size != APPEND_SIZE_TO_KEYBLOB_T(cmk->keybloblen) ||
+         cmk->keybloblen == 0 ||
++        cmk->keybloblen > EH_CMK_MAX_SIZE ||
+         (cmk->metadata.origin != EH_INTERNAL_KEY && cmk->metadata.origin != EH_EXTERNAL_KEY) ||
+         cmk->metadata.keyusage != EH_KEYUSAGE_ENCRYPT_DECRYPT)
+         return SGX_ERROR_INVALID_PARAMETER;
+ 
+-    if (aad != NULL && aad_size != APPEND_SIZE_TO_DATA_T(aad->datalen))
++    if (aad != NULL && (aad_size != APPEND_SIZE_TO_DATA_T(aad->datalen) || aad->datalen > EH_AAD_MAX_SIZE))
+         return SGX_ERROR_INVALID_PARAMETER;
+ 
+     if (aad == NULL && aad_size != 0)
+@@ -415,11 +419,14 @@ sgx_status_t enclave_encrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
+             ciphertext->datalen = plaintext->datalen + EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE;
+             return SGX_SUCCESS;
+         }
+-        if (ciphertext->datalen < plaintext->datalen + SGX_AESGCM_IV_SIZE + SGX_AESGCM_MAC_SIZE)
++        if (ciphertext->datalen < plaintext->datalen + SGX_AESGCM_IV_SIZE + SGX_AESGCM_MAC_SIZE ||
++            ciphertext->datalen > EH_ENCRYPT_MAX_SIZE + EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE)
+             return SGX_ERROR_INVALID_PARAMETER;
+         ret = ehsm_aes_gcm_encrypt(aad, cmk, plaintext, ciphertext);
+         break;
+     case EH_SM4_CTR:
++        if (ciphertext->datalen > EH_ENCRYPT_MAX_SIZE + SGX_SM4_IV_SIZE)
++            return SGX_ERROR_INVALID_PARAMETER;
+         ret = ehsm_sm4_ctr_encrypt(cmk, plaintext, ciphertext);
+         break;
+     case EH_SM4_CBC:
+@@ -442,18 +449,20 @@ sgx_status_t enclave_decrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
+     if (cmk == NULL ||
+         cmk_size != APPEND_SIZE_TO_KEYBLOB_T(cmk->keybloblen) ||
+         cmk->keybloblen == 0 ||
++        cmk->keybloblen > EH_CMK_MAX_SIZE ||
+         (cmk->metadata.origin != EH_INTERNAL_KEY && cmk->metadata.origin != EH_EXTERNAL_KEY) ||
+         cmk->metadata.keyusage != EH_KEYUSAGE_ENCRYPT_DECRYPT)
+         return SGX_ERROR_INVALID_PARAMETER;
+ 
+-    if (aad != NULL && aad_size != APPEND_SIZE_TO_DATA_T(aad->datalen))
++    if (aad != NULL && (aad_size != APPEND_SIZE_TO_DATA_T(aad->datalen) || aad->datalen > EH_AAD_MAX_SIZE))
+         return SGX_ERROR_INVALID_PARAMETER;
+ 
+     if (aad == NULL && aad_size != 0)
+         return SGX_ERROR_INVALID_PARAMETER;
+ 
+     if (plaintext == NULL ||
+-        plaintext_size != APPEND_SIZE_TO_DATA_T(plaintext->datalen))
++        plaintext_size != APPEND_SIZE_TO_DATA_T(plaintext->datalen) ||
++        plaintext->datalen > EH_PAYLOAD_MAX_SIZE)
+         return SGX_ERROR_INVALID_PARAMETER;
+ 
+     if (ciphertext == NULL ||
+@@ -466,7 +475,8 @@ sgx_status_t enclave_decrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
+     case EH_AES_GCM_128:
+     case EH_AES_GCM_192:
+     case EH_AES_GCM_256:
+-        if (ciphertext->datalen < EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE)
++        if (ciphertext->datalen < EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE ||
++            ciphertext->datalen > EH_ENCRYPT_MAX_SIZE + EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE)
+             return SGX_ERROR_INVALID_PARAMETER;
+         if (plaintext->datalen == 0)
+         {
+@@ -485,9 +495,13 @@ sgx_status_t enclave_decrypt(ehsm_keyblob_t *cmk, size_t cmk_size,
+         ret = ehsm_aes_gcm_decrypt(aad, cmk, ciphertext, plaintext);
+         break;
+     case EH_SM4_CTR:
++        if (ciphertext->datalen > EH_ENCRYPT_MAX_SIZE + SGX_SM4_IV_SIZE)
++            return SGX_ERROR_INVALID_PARAMETER;
+         ret = ehsm_sm4_ctr_decrypt(cmk, ciphertext, plaintext);
+         break;
+     case EH_SM4_CBC:
++        if (ciphertext->datalen > EH_ENCRYPT_MAX_SIZE + SGX_SM4_IV_SIZE)
++            return SGX_ERROR_INVALID_PARAMETER;
+         ret = ehsm_sm4_cbc_decrypt(cmk, ciphertext, plaintext);
+         break;
+     default:
+@@ -842,6 +856,7 @@ sgx_status_t enclave_generate_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
+     if (cmk == NULL ||
+         cmk_size != APPEND_SIZE_TO_KEYBLOB_T(cmk->keybloblen) ||
+         cmk->keybloblen == 0 ||
++        cmk->keybloblen > EH_CMK_MAX_SIZE ||
+         cmk->metadata.origin != EH_INTERNAL_KEY ||
+         cmk->metadata.keyusage != EH_KEYUSAGE_ENCRYPT_DECRYPT)
+         return SGX_ERROR_INVALID_PARAMETER;
+@@ -852,7 +867,7 @@ sgx_status_t enclave_generate_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
+         plaintext->datalen == 0)
+         return SGX_ERROR_INVALID_PARAMETER;
+ 
+-    if (aad != NULL && aad_size != APPEND_SIZE_TO_DATA_T(aad->datalen))
++    if (aad != NULL && (aad_size != APPEND_SIZE_TO_DATA_T(aad->datalen) || aad->datalen > EH_AAD_MAX_SIZE))
+         return SGX_ERROR_INVALID_PARAMETER;
+ 
+     if (aad == NULL && aad_size != 0)
+@@ -887,15 +902,18 @@ sgx_status_t enclave_generate_datakey(ehsm_keyblob_t *cmk, size_t cmk_size,
+     case EH_AES_GCM_128:
+     case EH_AES_GCM_192:
+     case EH_AES_GCM_256:
+-        if (ciphertext->datalen < plaintext->datalen + SGX_AESGCM_IV_SIZE + SGX_AESGCM_MAC_SIZE)
++        if (ciphertext->datalen < plaintext->datalen + SGX_AESGCM_IV_SIZE + SGX_AESGCM_MAC_SIZE ||
++            ciphertext->datalen > 1024 + SGX_AESGCM_IV_SIZE + SGX_AESGCM_MAC_SIZE)
+             return SGX_ERROR_INVALID_PARAMETER;
+         break;
+     case EH_SM4_CBC:
+-        if (ciphertext->datalen < (plaintext->datalen / 16 + 1) * 16 + SGX_SM4_IV_SIZE)
++        if (ciphertext->datalen < (plaintext->datalen / 16 + 1) * 16 + SGX_SM4_IV_SIZE ||
++            ciphertext->datalen > (1024 / 16 + 1) * 16 + SGX_SM4_IV_SIZE)
+             return SGX_ERROR_INVALID_PARAMETER;
+         break;
+     case EH_SM4_CTR:
+-        if (ciphertext->datalen < plaintext->datalen + SGX_SM4_IV_SIZE)
++        if (ciphertext->datalen < plaintext->datalen + SGX_SM4_IV_SIZE ||
++            ciphertext->datalen > 1024 + SGX_SM4_IV_SIZE)
+             return SGX_ERROR_INVALID_PARAMETER;
+         break;
+     default:

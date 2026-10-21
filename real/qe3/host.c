@@ -10,6 +10,10 @@
 
 #include "enclave_u.h"
 
+#ifndef ENCLAVE_PATH
+#define ENCLAVE_PATH "enclave.signed.so"
+#endif
+
 #define KEY_ID_SIZE 32
 #define PUBLIC_KEY_SIZE 64
 
@@ -162,7 +166,7 @@ int main(int argc, char **argv)
     int token_updated = 0;
     sgx_enclave_id_t enclave_id = 0;
     sgx_status_t status = sgx_create_enclave(
-        "enclave.signed.so", SGX_DEBUG_FLAG, &token, &token_updated,
+        ENCLAVE_PATH, SGX_DEBUG_FLAG, &token, &token_updated,
         &enclave_id, NULL);
     if (status != SGX_SUCCESS) {
         fprintf(stderr, "sgx_create_enclave failed: %#x\n",

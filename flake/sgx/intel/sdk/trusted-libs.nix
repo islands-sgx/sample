@@ -78,6 +78,7 @@ stdenv.mkDerivation {
 
   preBuild = ''
     export ATFIELD_SOURCE_ROOT="$PWD"
+    export ATFIELD_OBJECT_ROOT="$PWD"
     export CC=${irConsistentCc}
     export CXX=${irConsistentCxx}
 
