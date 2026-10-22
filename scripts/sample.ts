@@ -149,13 +149,16 @@ function buildSample(sample: Sample): void {
     const wantSdk = `SGX_SDK_ROOT:UNINITIALIZED=${tool.SGX_SDK_ROOT}`;
     const wantRoots = cmakeArgs.map((arg) => arg.slice(2).replace("=", ":UNINITIALIZED="));
     if (
-      !cacheLines.includes(`CMAKE_C_COMPILER:FILEPATH=${tool.ATFIELD_CC}`) ||
+      (!cacheLines.includes(`CMAKE_C_COMPILER:FILEPATH=${tool.ATFIELD_CC}`) &&
+        !cacheLines.includes(`CMAKE_C_COMPILER:STRING=${tool.ATFIELD_CC}`)) ||
       !cacheLines.includes(wantImpl) ||
       !cacheLines.includes(wantSdk) ||
       !cacheLines.includes(wantWorkset) ||
       wantRoots.some((entry) => !cacheLines.includes(entry))
     ) {
-      rmSync(buildDir, { recursive: true, force: true });
+      const preservedBuildDir = `${buildDir}.cache-mismatch-${Date.now()}-${randomUUID()}`;
+      renameSync(buildDir, preservedBuildDir);
+      console.error(`CMake cache mismatch; preserved prior build directory at ${preservedBuildDir}`);
     }
   }
 
