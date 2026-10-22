@@ -33,8 +33,8 @@ stdenv.mkDerivation (rec {
   src = fetchFromGitHub {
     owner = "islands-sgx";
     repo = "intel-confidentialComputing_sgx";
-    rev = "87af9c504bbc73d35c2292c8b999cd1e00493015";
-    hash = "sha256-zQtvH2iAW/8qQDynnTv0MT0Hc5Hzk59WlmWE5j7QHCc=";
+    rev = "5eebcd657472e957291a94da9a68cfc0b55e7e82";
+    hash = "sha256-mSojJ8fvzJkNcWtaOPEm/WX155Khv4oW8HP2Pp6rD3g=";
     fetchSubmodules = true;
   };
 
