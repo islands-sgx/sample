@@ -150,7 +150,8 @@ function buildSample(sample: Sample): void {
     const wantRoots = cmakeArgs.map((arg) => arg.slice(2).replace("=", ":UNINITIALIZED="));
     if (
       (!cacheLines.includes(`CMAKE_C_COMPILER:FILEPATH=${tool.ATFIELD_CC}`) &&
-        !cacheLines.includes(`CMAKE_C_COMPILER:STRING=${tool.ATFIELD_CC}`)) ||
+        !cacheLines.includes(`CMAKE_C_COMPILER:STRING=${tool.ATFIELD_CC}`) &&
+        !cacheLines.includes(`CMAKE_C_COMPILER:UNINITIALIZED=${tool.ATFIELD_CC}`)) ||
       !cacheLines.includes(wantImpl) ||
       !cacheLines.includes(wantSdk) ||
       !cacheLines.includes(wantWorkset) ||
