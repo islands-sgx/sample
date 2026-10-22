@@ -17,7 +17,7 @@ index 55a3e36..e827dda 100644
      CHECK_STATE(sigS);
 +    CHECK_STATE(enc_len >= SGX_AESGCM_MAC_SIZE + SGX_AESGCM_IV_SIZE &&
 +                enc_len <= ENCLAVE_BUF_LEN);
-+    CHECK_STATE(base >= 2 && base <= 32);
++    CHECK_STATE((base >= 2 && base <= 62) || (base >= -36 && base <= -2));
 +    {
 +        size_t hash_len = strnlen(hash, 65);
 +        CHECK_STATE(hash_len >= 1 && hash_len <= 64);
