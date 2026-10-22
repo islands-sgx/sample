@@ -43,6 +43,10 @@
         "sgxwallet"
         "signal-cds"
       ];
+      benchNames = [
+        "yescrypt-kdf-rw"
+        "wolfssl-pbkdf2-sha256"
+      ];
       anchorModes = [ "raw" "anchor" ];
       realModes = [ "raw" "anchor" "protect" ];
       sourceEnv = {
@@ -73,8 +77,10 @@
           sampleLibraries =
             if group == "anchor" && name == "curve25519-donna" then
               [ libraries."curve25519-donna".${libraryMode} ]
-            else if group == "anchor" && name == "yescrypt" then
+            else if (group == "anchor" && name == "yescrypt") || (group == "bench" && name == "yescrypt-kdf-rw") then
               [ libraries.yescrypt.${libraryMode} ]
+            else if group == "bench" && name == "wolfssl-pbkdf2-sha256" then
+              [ libraries.wolfssl.${libraryMode} ]
             else if group == "real" && (lib.hasPrefix "ehsm" name) then
               [ real.libraries.sgxssl.${libraryMode} ]
             else if group == "real" && name == "sgxwallet" then
@@ -112,6 +118,7 @@
             sampleSgx.psw
             sampleSgx.sdk
             sgx.trusted.${libraryMode}
+            toolchain.stdenv.cc
             toolchain.atfieldLlc
             toolchain.lld
           ]
@@ -155,8 +162,11 @@
           // lib.optionalAttrs (group == "anchor" && name == "curve25519-donna") {
             CURVE25519_DONNA_SGX_ROOT = "${builtins.head sampleLibraries}";
           }
-          // lib.optionalAttrs (group == "anchor" && name == "yescrypt") {
+          // lib.optionalAttrs ((group == "anchor" && name == "yescrypt") || (group == "bench" && name == "yescrypt-kdf-rw")) {
             YESCRYPT_SGX_ROOT = "${builtins.head sampleLibraries}";
+          }
+          // lib.optionalAttrs (group == "bench" && name == "wolfssl-pbkdf2-sha256") {
+            WOLFSSL_SGX_ROOT = "${builtins.head sampleLibraries}";
           }
           // lib.optionalAttrs (group == "real" && (lib.hasPrefix "ehsm" name)) {
             SGXSSL_ROOT = "${real.libraries.sgxssl.${libraryMode}}";
@@ -176,6 +186,9 @@
         ++ lib.concatMap (
           name: map (mode: lib.nameValuePair "real-${name}-${mode}" (mkSampleShell "real" name mode)) realModes
         ) realNames
+        ++ lib.concatMap (
+          name: map (mode: lib.nameValuePair "bench-${name}-${mode}" (mkSampleShell "bench" name mode)) realModes
+        ) benchNames
       );
       packageOutputs = {
         atfield-bundle = toolchain.implementBundle;
@@ -199,6 +212,8 @@
         sgx-trusted-raw = sgx.trusted.raw;
         yescrypt-sgx-anchor = libraries.yescrypt.anchor;
         yescrypt-sgx-raw = libraries.yescrypt.raw;
+        wolfssl-sgx-anchor = libraries.wolfssl.anchor;
+        wolfssl-sgx-raw = libraries.wolfssl.raw;
       };
     in
     {

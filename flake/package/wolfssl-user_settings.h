@@ -1,0 +1,30 @@
+#ifndef ATFIELD_WOLFSSL_USER_SETTINGS_H
+#define ATFIELD_WOLFSSL_USER_SETTINGS_H
+
+#define WOLFCRYPT_ONLY
+#define WOLFSSL_SGX
+#define WOLFSSL_X86_64_BUILD
+#define USE_INTEL_SPEEDUP
+#define WOLFSSL_USER_SETTINGS_ASM
+#define WC_NO_INTERNAL_FUNCTION_POINTERS
+#define HAVE_PBKDF2
+#define NO_PKCS12
+#define NO_PKCS8
+#define NO_PBKDF1
+#define NO_MD5
+#define NO_SHA
+#define NO_SHA512
+#define NO_DSA
+#define NO_STDATOMIC_H
+#define NO_WOLFSSL_MEMORY
+#define WOLFSSL_NO_MALLOC
+#define SINGLE_THREADED
+#define NO_FILESYSTEM
+#define NO_WRITEV
+#define NO_MAIN_DRIVER
+
+#if defined(WOLFSSL_SMALL_STACK) || defined(WOLFSSL_SMALL_STACK_CACHE)
+#error "small-stack modes are prohibited"
+#endif
+
+#endif

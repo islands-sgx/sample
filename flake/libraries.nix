@@ -110,4 +110,20 @@ in
     raw = yescryptMode "raw";
     anchor = yescryptMode "anchor";
   };
+  wolfssl = {
+    raw = pkgs.callPackage ./package/wolfssl.nix {
+      inherit (toolchain) stdenv;
+      llvmTools = toolchain.atfieldLlc;
+      enclaveCompiler = toolchain.enclaveCompiler;
+      sgxSdk = sgx.sdk;
+      mode = "raw";
+    };
+    anchor = pkgs.callPackage ./package/wolfssl.nix {
+      inherit (toolchain) stdenv;
+      llvmTools = toolchain.atfieldLlc;
+      enclaveCompiler = toolchain.enclaveCompiler;
+      sgxSdk = sgx.sdk;
+      mode = "anchor";
+    };
+  };
 }

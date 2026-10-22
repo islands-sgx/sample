@@ -29,6 +29,7 @@ describe("sample CLI rejects invalid requests before entering Nix", () => {
     { args: ["build", "anchor", "Bad_Name", "raw"], message: "NAME must use lower-case words separated by hyphens" },
     { args: ["build", "anchor", "not-a-sample", "raw"], message: "unknown anchor sample: not-a-sample" },
     { args: ["build", "real", "sqlite", "raw"], message: "unknown real sample: sqlite" },
+    { args: ["build", "bench", "sqlite", "raw"], message: "unknown bench sample: sqlite" },
   ])("rejects $args", ({ args, message }) => {
     const result = invoke(args);
     expect(result.exitCode).toBe(64);

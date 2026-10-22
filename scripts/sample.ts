@@ -4,7 +4,7 @@ import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSyn
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-type Group = "anchor" | "real";
+type Group = "anchor" | "real" | "bench";
 type Mode = "raw" | "anchor" | "protect";
 type Action = "build" | "run";
 interface Sample { action: Action; group: Group; name: string; mode: Mode; hostArgs: string[]; }
@@ -23,7 +23,7 @@ function parseArgs(args: string[]): Sample {
   if (action !== "build" && action !== "run") fail(usage);
   if (args.length < 4 || (action === "build" && args.length !== 4)) fail(usage);
   const [, groupArg, name, modeArg, ...hostArgs] = args;
-  if (groupArg !== "anchor" && groupArg !== "real") fail("GROUP must be anchor or real");
+  if (groupArg !== "anchor" && groupArg !== "real" && groupArg !== "bench") fail("GROUP must be anchor or real (or bench)");
   if (modeArg !== "raw" && modeArg !== "anchor" && modeArg !== "protect") fail("MODE must be raw, anchor, or protect");
   if (groupArg === "anchor" && modeArg === "protect") fail("anchor demonstrations have no Field or protect mode");
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) fail("NAME must use lower-case words separated by hyphens");
@@ -119,7 +119,7 @@ function buildSample(sample: Sample): void {
   tool.SGX_ENCLAVE_CLANG = process.env.SGX_ENCLAVE_CLANG ?? "";
   const cmakeArgs: string[] = [];
   for (const name of [
-    "CURVE25519_DONNA_SGX_ROOT", "YESCRYPT_SGX_ROOT", "QE3_SOURCE_ROOT", "EHSM_SOURCE_ROOT",
+    "CURVE25519_DONNA_SGX_ROOT", "YESCRYPT_SGX_ROOT", "WOLFSSL_SGX_ROOT", "QE3_SOURCE_ROOT", "EHSM_SOURCE_ROOT",
     "SGXWALLET_SOURCE_ROOT", "SIGNAL_CDS_SOURCE_ROOT", "SGXSSL_ROOT", "SGX_GMP_ROOT", "SGX_MCL_ROOT",
   ]) {
     const value = process.env[name];
