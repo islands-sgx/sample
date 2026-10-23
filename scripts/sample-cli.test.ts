@@ -24,8 +24,10 @@ function invoke(args: string[], extraEnv: Record<string, string> = {}): Result {
 describe("sample CLI rejects invalid requests before entering Nix", () => {
   test.each([
     { args: ["build", "other", "yescrypt", "raw"], message: "GROUP must be anchor, bench/micro, or bench/application" },
-    { args: ["build", "anchor", "yescrypt", "invalid"], message: "MODE must be raw, anchor, or protect" },
+    { args: ["build", "anchor", "yescrypt", "invalid"], message: "MODE must be raw, anchor, protect, or protect-naive" },
     { args: ["build", "anchor", "yescrypt", "protect"], message: "anchor demonstrations have no Field or protect mode" },
+    { args: ["build", "anchor", "yescrypt", "protect-naive"], message: "anchor demonstrations have no Field or protect mode" },
+    { args: ["profile", "anchor", "yescrypt", "raw"], message: "profile action requires dynamic protect mode" },
     { args: ["build", "anchor", "Bad_Name", "raw"], message: "NAME must use lower-case words separated by hyphens" },
     { args: ["build", "anchor", "not-a-sample", "raw"], message: "unknown anchor sample: not-a-sample" },
     { args: ["build", "bench/application", "sqlite", "raw"], message: "unknown bench/application sample: sqlite" },
@@ -34,6 +36,13 @@ describe("sample CLI rejects invalid requests before entering Nix", () => {
     const result = invoke(args);
     expect(result.exitCode).toBe(64);
     expect(result.stderr).toContain(message);
+  });
+
+  test("dynamic protect build requires a frozen v2 workset before entering Nix", () => {
+    const missingWorkset = `/tmp/sample-cli-workset-${randomUUID()}.json`;
+    const result = invoke(["build", "bench/micro", "yescrypt-kdf-rw", "protect"], { ATFIELD_FROZEN_WORKSET: missingWorkset });
+    expect(result.exitCode).toBe(66);
+    expect(result.stderr).toContain("dynamic protect requires an existing frozen v2 workset");
   });
 
   test("requires exact build arguments", () => {

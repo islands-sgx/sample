@@ -1,0 +1,13 @@
+#include <stddef.h>
+#include <stdint.h>
+
+const uint8_t *sample_answer(size_t *size)
+{
+    static const uint8_t expected[16] = {
+        0xca, 0x08, 0x51, 0xa2, 0xd1, 0x24, 0xe1, 0x90,
+        0x66, 0xa2, 0x7f, 0x55, 0x97, 0xed, 0xcd, 0x6e,
+    };
+
+    *size = sizeof(expected);
+    return expected;
+}

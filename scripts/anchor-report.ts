@@ -5,7 +5,14 @@ import { resolve } from "node:path";
 const PAGE = 4096;
 const anchorSamples = ["curve25519-donna", "fiat-p384", "yescrypt", "sqlite"];
 const benchSamples = [
-  ...["yescrypt-kdf-rw", "wolfssl-pbkdf2-sha256"].map(name => ({ group: "bench/micro" as const, name })),
+  ...[
+    "yescrypt-kdf-rw",
+    "wolfssl-pbkdf2-sha256",
+    "openssl-aes-256-gcm-1k",
+    "openssl-sha256-4k",
+    "mlkem-768",
+    "mldsa-65",
+  ].map(name => ({ group: "bench/micro" as const, name })),
   ...["ehsm", "ehsm-opt-1", "ehsm-opt-2", "qe3", "sgxwallet", "signal-cds"]
     .map(name => ({ group: "bench/application" as const, name })),
 ];

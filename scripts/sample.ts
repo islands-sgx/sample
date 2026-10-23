@@ -5,13 +5,21 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 type Group = "anchor" | "bench/micro" | "bench/application";
-type Mode = "raw" | "anchor" | "protect";
-type Action = "build" | "run";
+type Mode = "raw" | "anchor" | "protect" | "protect-naive";
+type Action = "build" | "profile" | "run" | "run-built";
 interface Sample { action: Action; group: Group; name: string; mode: Mode; hostArgs: string[]; }
 
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = resolve(dirname(scriptPath), "..");
-const usage = "usage: bun scripts/sample.ts build GROUP NAME MODE | bun scripts/sample.ts run GROUP NAME MODE [host args...]";
+const usage = "usage: bun scripts/sample.ts build GROUP NAME MODE | bun scripts/sample.ts profile GROUP NAME protect | bun scripts/sample.ts run|run-built GROUP NAME MODE [host args...]";
+
+function isProtectMode(mode: Mode): boolean {
+  return mode === "protect" || mode === "protect-naive";
+}
+
+function cmakeMode(mode: Mode): "raw" | "anchor" | "protect" {
+  return isProtectMode(mode) ? "protect" : mode;
+}
 
 function fail(message: string, code = 64): never {
   console.error(message);
@@ -20,21 +28,22 @@ function fail(message: string, code = 64): never {
 
 function parseArgs(args: string[]): Sample {
   const action = args[0];
-  if (action !== "build" && action !== "run") fail(usage);
-  if (args.length < 4 || (action === "build" && args.length !== 4)) fail(usage);
+  if (action !== "build" && action !== "profile" && action !== "run" && action !== "run-built") fail(usage);
+  if (args.length < 4 || ((action === "build" || action === "profile") && args.length !== 4)) fail(usage);
   const [, groupArg, name, modeArg, ...hostArgs] = args;
   if (groupArg !== "anchor" && groupArg !== "bench/micro" && groupArg !== "bench/application") {
     fail("GROUP must be anchor, bench/micro, or bench/application");
   }
-  if (modeArg !== "raw" && modeArg !== "anchor" && modeArg !== "protect") fail("MODE must be raw, anchor, or protect");
-  if (groupArg === "anchor" && modeArg === "protect") fail("anchor demonstrations have no Field or protect mode");
+  if (modeArg !== "raw" && modeArg !== "anchor" && modeArg !== "protect" && modeArg !== "protect-naive") fail("MODE must be raw, anchor, protect, or protect-naive");
+  if (groupArg === "anchor" && isProtectMode(modeArg as Mode)) fail("anchor demonstrations have no Field or protect mode");
+  if (action === "profile" && modeArg !== "protect") fail("profile action requires dynamic protect mode");
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) fail("NAME must use lower-case words separated by hyphens");
   const group = groupArg as Group;
   const mode = modeArg as Mode;
   const sourceRoot = join(projectRoot, group, name);
   if (!existsSync(join(sourceRoot, "CMakeLists.txt"))) fail(`unknown ${group} sample: ${name}`);
-  if (action === "run" && group === "anchor" && hostArgs.length > 0) fail("anchor samples do not accept host arguments");
-  if (action === "run" && mode === "protect") validateProtectRunnerOptions();
+  if ((action === "run" || action === "run-built") && group === "anchor" && hostArgs.length > 0) fail("anchor samples do not accept host arguments");
+  if ((action === "run" || action === "run-built") && isProtectMode(mode)) validateProtectRunnerOptions();
   return { action, group, name, mode, hostArgs };
 }
 
@@ -70,7 +79,7 @@ function commandExists(command: string): boolean {
 function ensureNixShell(sample: Sample): void {
   const marker = `${sample.group}/${sample.name}/${sample.mode}`;
   if (process.env.ATFIELD_SAMPLE_SHELL === marker) {
-    if (sample.mode === "protect") {
+    if (isProtectMode(sample.mode)) {
       const implementRoot = process.env.ATFIELD_IMPLEMENT_ROOT;
       if (!implementRoot || !existsSync(implementRoot)) {
         fail("ATFIELD_IMPLEMENT_ROOT is missing or invalid in protect shell", 66);
@@ -85,8 +94,12 @@ function ensureNixShell(sample: Sample): void {
 
   const shellName = `${sample.group.replace("/", "-")}-${sample.name}-${sample.mode}`;
   const envArgs = [`ATFIELD_SAMPLE_SHELL=${marker}`];
-  if (sample.mode === "protect" && process.env.ATFIELD_IMPLEMENT_ROOT) {
+  if (isProtectMode(sample.mode) && process.env.ATFIELD_IMPLEMENT_ROOT) {
     envArgs.push(`ATFIELD_IMPLEMENT_ROOT=${process.env.ATFIELD_IMPLEMENT_ROOT}`);
+  }
+  for (const name of ["ATFIELD_FROZEN_WORKSET", "ATFIELD_BENCH_LEASE_ALL", "ATFIELD_HOST_RUNNER", "ATFIELD_READINESS_BACKEND"]) {
+    const value = process.env[name];
+    if (value !== undefined) envArgs.push(`${name}=${value}`);
   }
   const result = run([
     "nix", "develop", "--no-write-lock-file", `${projectRoot}#${shellName}`,
@@ -109,8 +122,26 @@ function samplePaths(sample: Sample) {
   return { buildDir: join(projectRoot, "build", sample.group, sample.name, sample.mode) };
 }
 
+function frozenWorkset(sample: Sample, buildDir: string): string {
+  const configured = process.env.ATFIELD_FROZEN_WORKSET;
+  return configured ? resolve(configured) : join(buildDir, "workset.dynamic.v2.json");
+}
+
+function requireFrozenWorkset(sample: Sample, buildDir: string): string {
+  if (sample.mode === "protect-naive") return "";
+  const path = frozenWorkset(sample, buildDir);
+  if (!existsSync(path)) fail(`dynamic protect requires an existing frozen v2 workset: ${path}`, 66);
+  let workset: Record<string, unknown>;
+  try { workset = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; }
+  catch { fail(`dynamic protect workset is not valid JSON: ${path}`, 66); }
+  if (workset!.schema !== "atfield-workset-v2") fail(`dynamic protect requires atfield-workset-v2: ${path}`, 66);
+  return path;
+}
+
 function buildSample(sample: Sample): void {
   const { buildDir } = samplePaths(sample);
+  const dynamicProfile = sample.action === "profile";
+  const worksetPath = sample.mode === "protect" && !dynamicProfile ? requireFrozenWorkset(sample, buildDir) : "";
   ensureNixShell(sample);
   const tool = requireVariables([
     "ATFIELD_CC", "ATFIELD_CXX", "ATFIELD_LLD", "ATFIELD_AR", "ATFIELD_RANLIB", "ATFIELD_NM",
@@ -128,7 +159,7 @@ function buildSample(sample: Sample): void {
     if (value) cmakeArgs.push(`-D${name}=${value}`);
   }
 
-  if (sample.mode === "protect") {
+  if (isProtectMode(sample.mode)) {
     const implementRoot = process.env.ATFIELD_IMPLEMENT_ROOT;
     if (!implementRoot || !existsSync(implementRoot)) fail("ATFIELD_IMPLEMENT_ROOT is missing or invalid in protect shell", 66);
     const root = realpathSync(implementRoot);
@@ -146,7 +177,7 @@ function buildSample(sample: Sample): void {
   const cachePath = join(buildDir, "CMakeCache.txt");
   if (existsSync(cachePath)) {
     const cacheLines = readFileSync(cachePath, "utf8").split("\n");
-    const wantWorkset = `ATFIELD_FROZEN_WORKSET:UNINITIALIZED=${process.env.ATFIELD_FROZEN_WORKSET ?? ""}`;
+    const wantWorkset = `ATFIELD_FROZEN_WORKSET:UNINITIALIZED=${worksetPath}`;
     const wantImpl = `ATFIELD_IMPLEMENT_ROOT:UNINITIALIZED=${tool.ATFIELD_IMPLEMENT_ROOT}`;
     const wantSdk = `SGX_SDK_ROOT:UNINITIALIZED=${tool.SGX_SDK_ROOT}`;
     const wantRoots = cmakeArgs.map((arg) => arg.slice(2).replace("=", ":UNINITIALIZED="));
@@ -156,7 +187,7 @@ function buildSample(sample: Sample): void {
         !cacheLines.includes(`CMAKE_C_COMPILER:UNINITIALIZED=${tool.ATFIELD_CC}`)) ||
       !cacheLines.includes(wantImpl) ||
       !cacheLines.includes(wantSdk) ||
-      !cacheLines.includes(wantWorkset) ||
+      (!cacheLines.includes(wantWorkset) && !(sample.mode === "protect" && worksetPath && cacheLines.includes("ATFIELD_FROZEN_WORKSET:UNINITIALIZED="))) ||
       wantRoots.some((entry) => !cacheLines.includes(entry))
     ) {
       const preservedBuildDir = `${buildDir}.cache-mismatch-${Date.now()}-${randomUUID()}`;
@@ -174,14 +205,16 @@ function buildSample(sample: Sample): void {
     `-DCMAKE_CXX_COMPILER_AR=${tool.ATFIELD_AR}`, `-DCMAKE_CXX_COMPILER_RANLIB=${tool.ATFIELD_RANLIB}`,
     `-DCMAKE_NM=${tool.ATFIELD_NM}`, `-DCMAKE_OBJCOPY=${tool.ATFIELD_OBJCOPY}`,
     `-DCMAKE_READELF=${tool.ATFIELD_READELF}`, "-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF",
-    `-DATFIELD_GROUP=${sample.group}`, `-DATFIELD_SAMPLE=${sample.name}`, `-DATFIELD_MODE=${sample.mode}`,
+    `-DATFIELD_GROUP=${sample.group}`, `-DATFIELD_SAMPLE=${sample.name}`, `-DATFIELD_MODE=${cmakeMode(sample.mode)}`,
     `-DATFIELD_IMPLEMENT_ROOT=${tool.ATFIELD_IMPLEMENT_ROOT}`,
     `-DATFIELD_CMAKE_MODULE=${tool.ATFIELD_CMAKE_MODULE}`,
     `-DATFIELD_LLC=${tool.ATFIELD_LLC}`,
     `-DATFIELD_TEST_SIGNING_KEY=${join(projectRoot, "build", "test-signing-key.pem")}`,
     `-DSGX_ENCLAVE_CLANG=${tool.SGX_ENCLAVE_CLANG}`, `-DSGX_SDK_ROOT=${tool.SGX_SDK_ROOT}`,
     `-DSGX_PSW_ROOT=${tool.SGX_PSW_ROOT}`, `-DSGX_TRUSTED_LIB_ROOT=${tool.SGX_TRUSTED_LIB_ROOT}`,
-    `-DATFIELD_FROZEN_WORKSET=${process.env.ATFIELD_FROZEN_WORKSET ?? ""}`,
+    `-DATFIELD_FROZEN_WORKSET=${worksetPath}`,
+    `-DATFIELD_WORKSET_POLICY=${sample.mode === "protect-naive" ? "naive" : "dynamic"}`,
+    `-DATFIELD_PROFILE_ONLY=${dynamicProfile ? "ON" : "OFF"}`,
     ...cmakeArgs,
   ];
   const compdbPath = join(buildDir, "compile_commands.json");
@@ -230,9 +263,10 @@ function runSample(sample: Sample): void {
   const readinessBackend = process.env.ATFIELD_READINESS_BACKEND ?? "kernel";
   let runnerPath = "";
   let runnerLibraryPath = "";
-  if (sample.mode === "protect") {
+  const benchLeaseAll = sample.action === "run-built" && process.env.ATFIELD_BENCH_LEASE_ALL === "1";
+  if (isProtectMode(sample.mode) || benchLeaseAll) {
     process.env.ATFIELD_READINESS_BACKEND = readinessBackend;
-    if (runnerMode === "on") {
+    if (runnerMode === "on" || benchLeaseAll) {
       const implementRoot = process.env.ATFIELD_IMPLEMENT_ROOT;
       if (!implementRoot || !existsSync(implementRoot)) fail("ATFIELD_IMPLEMENT_ROOT is missing or invalid in protect shell", 66);
       try { runnerLibraryPath = validateRunnerLibraryPath(); }
@@ -245,15 +279,18 @@ function runSample(sample: Sample): void {
     }
   }
 
-  buildSample(sample);
+  if (sample.action === "run") buildSample(sample);
+  runBuiltSample(sample, buildDir, runJson, runnerMode, readinessBackend, runnerPath, runnerLibraryPath);
+}
+
+function runBuiltSample(sample: Sample, buildDir: string, runJson: string, runnerMode: string,
+  readinessBackend: string, runnerPath: string, runnerLibraryPath: string): void {
+  if (isProtectMode(sample.mode)) validateBuiltProtectIdentity(sample, buildDir);
   if (process.env.SGX_MODE !== "HW") fail("SGX_MODE must be HW; simulation fallback is disabled", 69);
   let device = "/dev/sgx_enclave";
   if (existsSync("/dev/sgx/enclave")) device = "/dev/sgx/enclave";
-  try {
-    accessSync(device, constants.R_OK | constants.W_OK);
-  } catch {
-    fail(`SGX hardware device is unavailable or not accessible: ${device}`, 69);
-  }
+  try { accessSync(device, constants.R_OK | constants.W_OK); }
+  catch { fail(`SGX hardware device is unavailable or not accessible: ${device}`, 69); }
   const hostPath = join(buildDir, "host");
   const imagePath = join(buildDir, "enclave.signed.so");
   ensureExecutable(hostPath, `build output is incomplete: ${buildDir}`);
@@ -262,18 +299,19 @@ function runSample(sample: Sample): void {
   const imageShaBefore = sha256(imagePath);
   const hostShaBefore = sha256(hostPath);
   let command: string[];
-  if (sample.mode === "protect" && runnerMode === "on") {
-    command = ["sudo", "--", runnerPath, "run", "--", "/usr/bin/env", `LD_LIBRARY_PATH=${runnerLibraryPath}`,
-      `ATFIELD_READINESS_BACKEND=${readinessBackend}`, "./host", ...sample.hostArgs];
-  } else if (sample.mode === "protect") {
-    command = ["./host", ...sample.hostArgs];
+  if ((isProtectMode(sample.mode) && runnerMode === "on") || (sample.action === "run-built" && process.env.ATFIELD_BENCH_LEASE_ALL === "1")) {
+    const runnerEnv = [`LD_LIBRARY_PATH=${runnerLibraryPath}`];
+    if (isProtectMode(sample.mode)) runnerEnv.push(`ATFIELD_READINESS_BACKEND=${readinessBackend}`);
+    command = ["sudo", "--", runnerPath, "run", "--", "/usr/bin/env", ...runnerEnv, "./host", ...sample.hostArgs];
   } else {
     command = ["./host", ...sample.hostArgs];
   }
-  const env = sample.mode === "protect" && runnerMode === "off"
+  const env = isProtectMode(sample.mode) && runnerMode === "off"
     ? { ...process.env, ATFIELD_READINESS_BACKEND: readinessBackend }
     : process.env;
+  const hostStart = process.hrtime.bigint();
   const exitCode = run(command, { cwd: buildDir, env });
+  const hostWallNs = Number(process.hrtime.bigint() - hostStart);
   if (exitCode !== 0) process.exit(exitCode);
 
   const imageShaAfter = sha256(imagePath);
@@ -282,16 +320,44 @@ function runSample(sample: Sample): void {
   mkdirSync(buildDir, { recursive: true });
   const temporary = join(buildDir, `.run.json.${process.pid}.${randomUUID()}`);
   try {
-    writeFileSync(temporary, `${JSON.stringify({ exitCode: 0, imageSha256: imageShaBefore, hostSha256: hostShaBefore })}\n`, { flag: "wx" });
+    writeFileSync(temporary, `${JSON.stringify({ exitCode: 0, imageSha256: imageShaBefore, hostSha256: hostShaBefore, host_wall_ns: hostWallNs })}\n`, { flag: "wx" });
     renameSync(temporary, runJson);
   } finally {
     rmSync(temporary, { force: true });
   }
 }
 
+function validateBuiltProtectIdentity(sample: Sample, buildDir: string): void {
+  const readyPath = join(buildDir, "ready.json");
+  const cachePath = join(buildDir, "CMakeCache.txt");
+  if (!existsSync(readyPath) || !existsSync(cachePath)) fail(`protect build identity is incomplete: ${buildDir}`, 66);
+  let ready: Record<string, unknown>;
+  try { ready = JSON.parse(readFileSync(readyPath, "utf8")) as Record<string, unknown>; }
+  catch { fail(`protect ready identity is not valid JSON: ${readyPath}`, 66); }
+  const cache = readFileSync(cachePath, "utf8").split("\n");
+  const policy = sample.mode === "protect-naive" ? "naive" : "dynamic";
+  const cachedPolicy = cache.find((line) => line.startsWith("ATFIELD_WORKSET_POLICY:"));
+  if (!cachedPolicy?.endsWith(`=${policy}`)) fail(`protect build workset policy mismatch: expected ${policy}`, 66);
+  const expectedPath = sample.mode === "protect-naive" ? join(buildDir, "workset.json") : frozenWorkset(sample, buildDir);
+  const expectedSchema = sample.mode === "protect-naive" ? "atfield-workset-v1" : "atfield-workset-v2";
+  if (ready!.workset !== expectedPath || ready!.workset_schema !== expectedSchema) {
+    fail(`protect ready identity does not match ${policy} workset at ${expectedPath}`, 66);
+  }
+  if (!existsSync(expectedPath) || typeof ready!.workset_sha256 !== "string" || sha256(expectedPath) !== ready!.workset_sha256) {
+    fail(`protect workset hash does not match ready identity: ${expectedPath}`, 66);
+  }
+  const cacheWorkset = cache.find((line) => line.startsWith("ATFIELD_FROZEN_WORKSET:")) ?? "";
+  if (sample.mode === "protect" && !cacheWorkset.endsWith(`=${expectedPath}`)) fail(`protect CMakeCache frozen workset mismatch: ${expectedPath}`, 66);
+  if (sample.mode === "protect-naive" && !cacheWorkset.endsWith("=")) fail("protect-naive CMakeCache must not use a frozen workset", 66);
+  const signedPath = join(buildDir, "enclave.signed.so");
+  if (typeof ready!.signed_final_elf_sha256 !== "string" || !existsSync(signedPath) || sha256(signedPath) !== ready!.signed_final_elf_sha256) {
+    fail("protect signed image does not match ready identity", 66);
+  }
+}
+
 function main(): void {
   const sample = parseArgs(process.argv.slice(2));
-  if (sample.action === "build") buildSample(sample);
+  if (sample.action === "build" || sample.action === "profile") buildSample(sample);
   else runSample(sample);
 }
 

@@ -31,4 +31,5 @@ in
     ;
   implementTools = implement.tools;
   implementBundle = implement.bundle;
+  implementAcquisition = implement.acquisition;
 }

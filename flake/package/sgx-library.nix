@@ -17,6 +17,7 @@
   headerName,
   headerSource ? null,
   headerText ? null,
+  extraHeaderSources ? [ ],
   compileFlags,
   license,
 }:
@@ -67,6 +68,9 @@ ${headerText}
 EOF
       install -Dm0644 "build/${headerName}" "$out/include/${headerName}"
     ''}
+    for header in ${lib.escapeShellArgs extraHeaderSources}; do
+      install -Dm0644 "$header" "$out/include/$(basename "$header")"
+    done
     for licenseFile in LICENSE LICENSE.txt COPYING COPYING.txt; do
       if [[ -f "$licenseFile" ]]; then
         install -Dm0644 "$licenseFile" "$out/share/licenses/${pname}/$licenseFile"

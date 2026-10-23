@@ -43,12 +43,17 @@
         "sgxwallet"
         "signal-cds"
       ];
+      opensslMicroNames = [
+        "openssl-aes-256-gcm-1k"
+        "openssl-sha256-4k"
+      ];
+      pqMicroNames = [ "mlkem-768" "mldsa-65" ];
       microNames = [
         "yescrypt-kdf-rw"
         "wolfssl-pbkdf2-sha256"
-      ];
+      ] ++ opensslMicroNames ++ pqMicroNames;
       anchorModes = [ "raw" "anchor" ];
-      benchModes = [ "raw" "anchor" "protect" ];
+      benchModes = [ "raw" "anchor" "protect" "protect-naive" ];
       benchSamples = {
         micro = microNames;
         application = applicationNames;
@@ -76,8 +81,11 @@
       mkSampleShell =
         group: name: mode:
         let
-          libraryMode = if mode == "protect" then "anchor" else mode;
-          sampleSgx = if mode == "protect" then sgx.protect else sgx;
+          protectMode = mode == "protect" || mode == "protect-naive";
+          cmakeMode = if protectMode then "protect" else mode;
+          worksetPolicy = if mode == "protect-naive" then "naive" else "dynamic";
+          libraryMode = if protectMode then "anchor" else mode;
+          sampleSgx = if protectMode then sgx.protect else sgx;
           sampleLibraries =
             if group == "anchor" && name == "curve25519-donna" then
               [ libraries."curve25519-donna".${libraryMode} ]
@@ -85,6 +93,12 @@
               [ libraries.yescrypt.${libraryMode} ]
             else if group == "bench/micro" && name == "wolfssl-pbkdf2-sha256" then
               [ libraries.wolfssl.${libraryMode} ]
+            else if group == "bench/micro" && name == "mlkem-768" then
+              [ libraries.mlkem.${libraryMode} ]
+            else if group == "bench/micro" && name == "mldsa-65" then
+              [ libraries.mldsa.${libraryMode} ]
+            else if group == "bench/micro" && lib.elem name opensslMicroNames then
+              [ application.libraries.sgxssl.${libraryMode} ]
             else if group == "bench/application" && (lib.hasPrefix "ehsm" name) then
               [ application.libraries.sgxssl.${libraryMode} ]
             else if group == "bench/application" && name == "sgxwallet" then
@@ -101,14 +115,17 @@
             sampleSgx.psw
           ];
           implementRoot = "${toolchain.implementBundle}";
-          protectPackages = lib.optionals (mode == "protect") [
+          protectPackages = lib.optionals protectMode [
             toolchain.implementBundle
           ];
-          implementRuntime = if mode == "protect" then
+          acquisitionPackages = lib.optionals (mode == "protect") [
+            toolchain.implementAcquisition
+          ];
+          implementRuntime = if protectMode || group != "anchor" then
             toolchain.implementBundle
           else
             toolchain.implementTools;
-          protectEnv = lib.optionalAttrs (mode == "protect") {
+          protectEnv = lib.optionalAttrs protectMode {
             ATFIELD_FIELD_TOOL = "${implementRoot}/bin/atfield-field";
           };
         in
@@ -126,15 +143,16 @@
             toolchain.atfieldLlc
             toolchain.lld
           ]
-          ++ lib.optionals (mode != "protect") [
+          ++ lib.optionals (!protectMode) [
             toolchain.enclaveCompiler
             toolchain.implementTools
           ]
           ++ protectPackages
+          ++ acquisitionPackages
           ++ sampleLibraries;
           env = {
             ATFIELD_ANCHOR_PREPARATION = if mode == "raw" then "0" else "1";
-            ATFIELD_FIELD_BOUNDARY = if mode == "protect" then "1" else "0";
+            ATFIELD_FIELD_BOUNDARY = if protectMode then "1" else "0";
             ATFIELD_CMAKE_MODULE = "${implementRuntime}/cmake/SgxEnclave.cmake";
             ATFIELD_IMPLEMENT_ROOT = "${implementRuntime}";
             ATFIELD_AR = "${toolchain.atfieldLlc}/bin/llvm-ar";
@@ -142,7 +160,7 @@
             ATFIELD_CXX = "${toolchain.stdenv.cc}/bin/c++";
             ATFIELD_LLC = "${toolchain.atfieldLlc}/bin/llc";
             ATFIELD_LLD = "${toolchain.lld}/bin/ld.lld";
-            ATFIELD_MODE = mode;
+            ATFIELD_MODE = cmakeMode;
             ATFIELD_NATIVE_ANCHORS = "${implementRuntime}/build/anchor/inject-native-anchors.ts";
             ATFIELD_NM = "${toolchain.atfieldLlc}/bin/llvm-nm";
             ATFIELD_OBJCOPY = "${toolchain.atfieldLlc}/bin/llvm-objcopy";
@@ -154,7 +172,7 @@
             LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibraries;
             SGX_ARCH = "x64";
             SGX_ENCLAVE_CLANG =
-              if mode == "protect" then
+              if protectMode then
                 "${implementRoot}/bin/atfield-enclave-clang"
               else
                 "${toolchain.enclaveCompiler}/bin/enclave-clang-ir-consistent";
@@ -172,6 +190,15 @@
           // lib.optionalAttrs (group == "bench/micro" && name == "wolfssl-pbkdf2-sha256") {
             WOLFSSL_SGX_ROOT = "${builtins.head sampleLibraries}";
           }
+          // lib.optionalAttrs (group == "bench/micro" && name == "mlkem-768") {
+            MLKEM_SGX_ROOT = "${builtins.head sampleLibraries}";
+          }
+          // lib.optionalAttrs (group == "bench/micro" && name == "mldsa-65") {
+            MLDSA_SGX_ROOT = "${builtins.head sampleLibraries}";
+          }
+          // lib.optionalAttrs (group == "bench/micro" && lib.elem name opensslMicroNames) {
+            SGXSSL_ROOT = "${application.libraries.sgxssl.${libraryMode}}";
+          }
           // lib.optionalAttrs (group == "bench/application" && (lib.hasPrefix "ehsm" name)) {
             SGXSSL_ROOT = "${application.libraries.sgxssl.${libraryMode}}";
           }
@@ -180,6 +207,9 @@
             SGX_MCL_ROOT = "${application.libraries.mcl.${libraryMode}}";
           }
           // protectEnv
+          // lib.optionalAttrs protectMode {
+            ATFIELD_WORKSET_POLICY = worksetPolicy;
+          }
           // lib.optionalAttrs (group == "bench/application") sourceEnv.${name};
         };
       sampleShells = lib.listToAttrs (
@@ -196,6 +226,7 @@
         ) [ "micro" "application" ]
       );
       packageOutputs = {
+        atfield-acquisition = toolchain.implementAcquisition;
         atfield-bundle = toolchain.implementBundle;
         atfield-llc = toolchain.atfieldLlc;
         atfield-tools = toolchain.implementTools;
@@ -207,6 +238,10 @@
         intel-sgx-ssl-anchor = application.libraries.sgxssl.anchor;
         intel-sgx-ssl-raw = application.libraries.sgxssl.raw;
         lld = toolchain.lld;
+        mlkem-native-sgx-anchor = libraries.mlkem.anchor;
+        mlkem-native-sgx-raw = libraries.mlkem.raw;
+        mldsa-native-sgx-anchor = libraries.mldsa.anchor;
+        mldsa-native-sgx-raw = libraries.mldsa.raw;
         mcl-sgx-anchor = application.libraries.mcl.anchor;
         mcl-sgx-raw = application.libraries.mcl.raw;
         sgx-psw = sgx.psw;

@@ -17,6 +17,68 @@ let
     url = "https://www.openwall.com/yescrypt/yescrypt-1.1.0.tar.gz";
     hash = "sha256-hdDNfTh6Q77VXriWyEzeD6Na5cFpcGCCyUrkcX9mxww=";
   };
+  mlkemSrc = pkgs.fetchFromGitHub {
+    owner = "pq-code-package";
+    repo = "mlkem-native";
+    rev = "e2d4b50896c76ada9950de2855dcd6069789e74e";
+    hash = "sha256-qXiiY559VnbvOCupLggx7z0CAcyUIFx+s6MLxeitmZ0=";
+  };
+  mldsaSrc = pkgs.fetchFromGitHub {
+    owner = "pq-code-package";
+    repo = "mldsa-native";
+    rev = "d7b1b6dd2081d67fef4a075e824024019f64d784";
+    hash = "sha256-tfeEvCDvBFFwdLjT4ZxGjmSC5pgpMeHawJLjD9oyAGw=";
+  };
+  pqFlags = [
+    "-m64"
+    "-mno-red-zone"
+    "-std=c99"
+    "-O3"
+    "-nostdinc"
+    "-ffreestanding"
+    "-fPIC"
+    "-fvisibility=hidden"
+    "-fno-builtin"
+    "-fwrapv"
+    "-fstack-protector-strong"
+    "-I${toolchain.stdenv.cc}/resource-root/include"
+  ];
+  mlkemMode = mode: mkLibrary {
+    pname = "mlkem-native-sgx-${mode}";
+    version = "e2d4b50896c7";
+    logicalPackage = "library/mlkem-native/e2d4b50896c7";
+    inherit mode;
+    src = mlkemSrc;
+    sources = [ "mlkem/mlkem_native.c" ];
+    archiveName = "libmlkem-native-sgx.a";
+    headerName = "mlkem_native.h";
+    headerSource = "mlkem/mlkem_native.h";
+    extraHeaderSources = [ "mlkem/mlkem_native_config.h" ];
+    compileFlags = pqFlags ++ [
+      "-Imlkem"
+      "-DMLK_CONFIG_PARAMETER_SET=768"
+      "-DMLK_CONFIG_NO_RANDOMIZED_API"
+    ];
+    license = lib.licenses.asl20;
+  };
+  mldsaMode = mode: mkLibrary {
+    pname = "mldsa-native-sgx-${mode}";
+    version = "d7b1b6dd2081";
+    logicalPackage = "library/mldsa-native/d7b1b6dd2081";
+    inherit mode;
+    src = mldsaSrc;
+    sources = [ "mldsa/mldsa_native.c" ];
+    archiveName = "libmldsa-native-sgx.a";
+    headerName = "mldsa_native.h";
+    headerSource = "mldsa/mldsa_native.h";
+    extraHeaderSources = [ "mldsa/mldsa_native_config.h" ];
+    compileFlags = pqFlags ++ [
+      "-Imldsa"
+      "-DMLD_CONFIG_PARAMETER_SET=65"
+      "-DMLD_CONFIG_NO_RANDOMIZED_API"
+    ];
+    license = lib.licenses.asl20;
+  };
   curveMode = mode: mkLibrary {
     pname = "curve25519-donna-sgx-${mode}";
     version = "1.3";
@@ -109,6 +171,14 @@ in
   yescrypt = {
     raw = yescryptMode "raw";
     anchor = yescryptMode "anchor";
+  };
+  mlkem = {
+    raw = mlkemMode "raw";
+    anchor = mlkemMode "anchor";
+  };
+  mldsa = {
+    raw = mldsaMode "raw";
+    anchor = mldsaMode "anchor";
   };
   wolfssl = {
     raw = pkgs.callPackage ./package/wolfssl.nix {
