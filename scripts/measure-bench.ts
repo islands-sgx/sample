@@ -96,11 +96,6 @@ function detail(result: Result): string {
   return text.length > 5000 ? text.slice(-5000) : text;
 }
 
-function refreshSudo(env: Record<string, string | undefined>): void {
-  const result = spawnSync(command("sudo"), ["-v"], { cwd: root, env, stdio: "inherit" });
-  if (result.status !== 0) throw new Error("sudo authentication failed" + (result.error ? ": " + String(result.error) : ""));
-}
-
 function requireSuccess(label: string, result: Result): void {
   if (result.code !== 0) throw new Error(label + " failed (exit " + result.code + ")\n" + detail(result));
 }
@@ -301,7 +296,6 @@ function prepareDynamic(sample: Sample, options: Options, env: Record<string, st
   const callerUid = process.getuid?.(), callerGid = process.getgid?.();
   if (callerUid === undefined || callerGid === undefined) throw new Error("POSIX caller uid/gid are unavailable");
   const invocation = buildPrepareSudoCommand(prepare, args, shellEnvironment, callerUid, callerGid);
-  refreshSudo(env);
   requireSuccess(sample.key + " acquisition", run(invocation.command, invocation.args, root, env));
   if (!existsSync(workset) || jsonFile(workset).schema !== "atfield-workset-v2") throw new Error("acquisition did not produce a v2 workset: " + workset);
   return buildMode(sample, "protect", env);
@@ -476,8 +470,7 @@ async function main(): Promise<number> {
       rmSync(state, { force: true });
       const sudo = command("sudo");
       console.log("Applying fixed non-turbo frequency policy");
-      refreshSudo(env);
-      const result = run(sudo, ["-E", "--", frequency, "apply", "--state", state]);
+      const result = run(sudo, ["-n", "--", frequency, "apply", "--state", state]);
       if (result.code !== 0) throw new Error("frequency apply failed (exit " + result.code + "): " + detail(result));
       const readback = parseHelper(result.stdout);
       checkFrequencyApply(readback);
@@ -496,7 +489,6 @@ async function main(): Promise<number> {
         console.log("trial " + task.trial + "/" + options.trials + " " + task.sample.key + " " + task.mode);
         let executed: Result | undefined;
         try {
-          refreshSudo(env);
           executed = run(bun, ["scripts/sample.ts", "run-built", task.sample.group, task.sample.name, task.mode, ...options.mainArgs], root, env);
           if (!executed) throw new Error("run-built was not launched");
           if (executed.code !== 0) throw new Error("run-built exit " + executed.code + ": " + detail(executed));
@@ -530,8 +522,7 @@ async function main(): Promise<number> {
     } finally {
       if (existsSync(state) && frequency) {
         try {
-          refreshSudo(env);
-          const result = run(command("sudo"), ["-E", "--", frequency, "restore", "--state", state]);
+          const result = run(command("sudo"), ["-n", "--", frequency, "restore", "--state", state]);
           if (result.code !== 0) throw new Error("frequency restore failed (exit " + result.code + "): " + detail(result));
           const readback = parseHelper(result.stdout);
           if (readback.action !== "restore") throw new Error("frequency helper did not confirm restore");
