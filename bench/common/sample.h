@@ -10,7 +10,6 @@
 
 int sample_fixture(void);
 int sample_secret(void);
-int sample_vector(void);
 int sample_input(uint64_t round);
 int sample_workload(void);
 int sample_output(uint8_t *buffer, size_t capacity, size_t *size);

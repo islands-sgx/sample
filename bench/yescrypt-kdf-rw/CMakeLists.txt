@@ -9,8 +9,6 @@ find_path(
 
 bench_add_sample(
   NAME yescrypt-kdf-rw
-  PROTECT_HEAP 0x280000
-  PROTECT_STACK 0x40000
   HOST_SOURCES answer.c
   INCLUDE_DIRECTORIES "${YESCRYPT_SGX_ROOT}/include"
   TRUSTED_LIBRARIES "${YESCRYPT_SGX_ROOT}/lib/libyescrypt-sgx.a")

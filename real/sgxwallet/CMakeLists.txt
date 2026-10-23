@@ -6,8 +6,6 @@ sgx_add_sample(
   NAME sgxwallet
   EDL enclave.edl
   CONFIG Enclave.config.xml
-  PROTECT_HEAP 0x400000
-  PROTECT_STACK 0x40000
   SOURCES
     "${SGXWALLET_ENCLAVE_DIRECTORY}/secure_enclave.c"
     "${SGXWALLET_ENCLAVE_DIRECTORY}/AESUtils.c"

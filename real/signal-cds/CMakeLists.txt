@@ -9,8 +9,6 @@ sgx_add_sample(
   NAME signal-cds
   EDL "${CMAKE_CURRENT_SOURCE_DIR}/enclave.edl"
   CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/Enclave.config.xml"
-  PROTECT_HEAP 0x400000
-  PROTECT_STACK 0x40000
   SOURCES
     "${_SIGNAL_CDS_ENCLAVE_ROOT}/src/sabd-enclave.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/enclave.c"

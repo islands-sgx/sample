@@ -32,11 +32,6 @@ int sample_secret(void)
     return 0;
 }
 
-int sample_vector(void)
-{
-    return 0;
-}
-
 int sample_input(uint64_t round)
 {
     (void)round;

@@ -3,7 +3,7 @@ include(CMakeParseArguments)
 
 function(bench_add_sample)
   set(options)
-  set(oneValueArgs NAME PROFILE OPTIMIZATION PROTECT_HEAP PROTECT_STACK PROTECT_Q)
+  set(oneValueArgs NAME PROFILE OPTIMIZATION PROTECT_Q)
   set(multiValueArgs INCLUDE_DIRECTORIES COMPILE_DEFINITIONS TRUSTED_LIBRARIES HOST_LIBRARIES
                      HOST_SOURCES ENCLAVE_COMPILE_OPTIONS)
   cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -13,12 +13,6 @@ function(bench_add_sample)
   endif()
   if(NOT ARG_PROFILE)
     set(ARG_PROFILE DEBUG)
-  endif()
-  if(NOT ARG_PROTECT_HEAP)
-    set(ARG_PROTECT_HEAP 0x280000)
-  endif()
-  if(NOT ARG_PROTECT_STACK)
-    set(ARG_PROTECT_STACK 0x40000)
   endif()
 
   set(_BENCH_COMMON_DIRECTORY "${CMAKE_SOURCE_DIR}/bench/common")
@@ -51,8 +45,6 @@ function(bench_add_sample)
     NAME "${ARG_NAME}"
     EDL "${_BENCH_COMMON_DIRECTORY}/bench.edl"
     CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/Enclave.config.xml"
-    PROTECT_HEAP "${ARG_PROTECT_HEAP}"
-    PROTECT_STACK "${ARG_PROTECT_STACK}"
     PROFILE "${ARG_PROFILE}"
     SOURCES "${_BENCH_COMMON_DIRECTORY}/enclave.c" "${CMAKE_CURRENT_SOURCE_DIR}/sample.c"
     HOST_SOURCES "${_BENCH_COMMON_DIRECTORY}/host.c" ${ARG_HOST_SOURCES}

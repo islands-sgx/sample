@@ -2,9 +2,8 @@ enclave {
     trusted {
         public int fixture(void);
         public int secret(void);
-        public int verification([out, size=capacity] uint8_t *buffer,
-                                size_t capacity, [out] size_t *size);
-        public int warmup(uint64_t rounds);
+        public int result([out, size=capacity] uint8_t *buffer,
+                          size_t capacity, [out] size_t *size);
         public int input(uint64_t round);
         public int timing([out] uint64_t *cycles);
         public int release(void);
