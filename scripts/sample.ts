@@ -177,18 +177,23 @@ function buildSample(sample: Sample): void {
   const cachePath = join(buildDir, "CMakeCache.txt");
   if (existsSync(cachePath)) {
     const cacheLines = readFileSync(cachePath, "utf8").split("\n");
-    const wantWorkset = `ATFIELD_FROZEN_WORKSET:UNINITIALIZED=${worksetPath}`;
-    const wantImpl = `ATFIELD_IMPLEMENT_ROOT:UNINITIALIZED=${tool.ATFIELD_IMPLEMENT_ROOT}`;
-    const wantSdk = `SGX_SDK_ROOT:UNINITIALIZED=${tool.SGX_SDK_ROOT}`;
-    const wantRoots = cmakeArgs.map((arg) => arg.slice(2).replace("=", ":UNINITIALIZED="));
+    const cacheValue = (name: string): string | undefined => {
+      const line = cacheLines.find((item) => item.startsWith(name + ":"));
+      return line?.slice(line.indexOf("=") + 1);
+    };
+    const cachedWorkset = cacheValue("ATFIELD_FROZEN_WORKSET");
+    const profileToFinal = sample.mode === "protect" && worksetPath && cachedWorkset === "";
+    const wantRoots = cmakeArgs.map((arg) => {
+      const assignment = arg.slice(2);
+      const equals = assignment.indexOf("=");
+      return [assignment.slice(0, equals), assignment.slice(equals + 1)] as const;
+    });
     if (
-      (!cacheLines.includes(`CMAKE_C_COMPILER:FILEPATH=${tool.ATFIELD_CC}`) &&
-        !cacheLines.includes(`CMAKE_C_COMPILER:STRING=${tool.ATFIELD_CC}`) &&
-        !cacheLines.includes(`CMAKE_C_COMPILER:UNINITIALIZED=${tool.ATFIELD_CC}`)) ||
-      !cacheLines.includes(wantImpl) ||
-      !cacheLines.includes(wantSdk) ||
-      (!cacheLines.includes(wantWorkset) && !(sample.mode === "protect" && worksetPath && cacheLines.includes("ATFIELD_FROZEN_WORKSET:UNINITIALIZED="))) ||
-      wantRoots.some((entry) => !cacheLines.includes(entry))
+      cacheValue("CMAKE_C_COMPILER") !== tool.ATFIELD_CC ||
+      cacheValue("ATFIELD_IMPLEMENT_ROOT") !== tool.ATFIELD_IMPLEMENT_ROOT ||
+      cacheValue("SGX_SDK_ROOT") !== tool.SGX_SDK_ROOT ||
+      (cachedWorkset !== worksetPath && !profileToFinal) ||
+      wantRoots.some(([name, value]) => cacheValue(name) !== value)
     ) {
       const preservedBuildDir = `${buildDir}.cache-mismatch-${Date.now()}-${randomUUID()}`;
       renameSync(buildDir, preservedBuildDir);
