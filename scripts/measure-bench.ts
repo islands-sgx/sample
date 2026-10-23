@@ -233,7 +233,53 @@ function buildMode(sample: Sample, mode: Mode, env: Record<string, string | unde
   return artifactMetrics(sample, mode);
 }
 
-function prepareDynamic(sample: Sample, options: Options, env: Record<string, string | undefined>, acquisition: string, bundle: string, runDir: string): Size {
+const canonicalRuntimeEnvKeys = ["PATH", "LD_LIBRARY_PATH", "SGX_AESM_ADDR", "LANG", "LC_ALL", "TZ"] as const;
+
+export function parseShellEnvironment(output: string): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const entry of output.split("\0")) {
+    if (!entry) continue;
+    const separator = entry.indexOf("=");
+    if (separator < 1) throw new Error("sample Nix shell emitted a malformed environment entry");
+    environment[entry.slice(0, separator)] = entry.slice(separator + 1);
+  }
+  return environment;
+}
+
+export function buildPrepareSudoCommand(
+  preparePath: string,
+  prepareArgs: string[],
+  shellEnvironment: Record<string, string>,
+  callerUid: number,
+  callerGid: number,
+): { command: string; args: string[] } {
+  if (!path.isAbsolute(preparePath)) throw new Error("prepare executable must be an absolute path");
+  if (!Number.isSafeInteger(callerUid) || callerUid < 0 || !Number.isSafeInteger(callerGid) || callerGid < 0) {
+    throw new Error("caller uid/gid are invalid");
+  }
+  if (!shellEnvironment.PATH || !shellEnvironment.LD_LIBRARY_PATH || shellEnvironment.SGX_MODE !== "HW") {
+    throw new Error("sample Nix shell lacks required PATH, LD_LIBRARY_PATH, or SGX_MODE=HW");
+  }
+  const assignments = ["SUDO_UID=" + callerUid, "SUDO_GID=" + callerGid];
+  for (const key of canonicalRuntimeEnvKeys) {
+    const value = shellEnvironment[key];
+    if (value !== undefined) assignments.push(key + "=" + value);
+  }
+  assignments.push("SGX_MODE=" + shellEnvironment.SGX_MODE);
+  // The canonical explorer builds its own ATFIELD_* runner environment and allowlists only runtime keys above.
+  // In particular, omit inherited ATFIELD_BENCH_LEASE_ALL/HOST_RUNNER so acquisition bypasses the outer lease.
+  return { command: "sudo", args: ["-n", "--", "env", "-i", ...assignments, preparePath, ...prepareArgs] };
+}
+
+function captureSampleRuntimeEnv(shell: string, env: Record<string, string | undefined>): Record<string, string> {
+  const cleanEnv = { ...env };
+  for (const key of Object.keys(cleanEnv)) if (key.startsWith("ATFIELD_")) delete cleanEnv[key];
+  const result = run(nix, ["develop", "--no-write-lock-file", root + "#" + shell, "--command", "env", "-0"], root, cleanEnv);
+  requireSuccess("capture " + shell + " runtime environment", result);
+  return parseShellEnvironment(result.stdout);
+}
+
+function prepareDynamic(sample: Sample, options: Options, env: Record<string, string | undefined>, acquisition: string, runDir: string): Size {
   const pdir = profileDir(sample), bundleFile = path.join(pdir, "profile-bundle.json"), workset = path.join(pdir, "workset.dynamic.v2.json");
   console.log(sample.key + ": Profile");
   requireSuccess(sample.key + " Profile", run(bun, ["scripts/sample.ts", "profile", sample.group, sample.name, "protect"], root, env));
@@ -246,16 +292,17 @@ function prepareDynamic(sample: Sample, options: Options, env: Record<string, st
   for (const file of [prepare, trace, explore]) if (!existsSync(file)) throw new Error("acquisition output missing " + file);
   const shell = sample.group.replace("/", "-") + "-" + sample.name + "-protect";
   const corpus = path.join(runDir, "corpus", sample.group, sample.name);
-  const args = ["develop", "--no-write-lock-file", root + "#" + shell, "--command", "env",
-    "ATFIELD_IMPLEMENT_ROOT=" + bundle, "ATFIELD_HOST_RUNNER=on", "ATFIELD_READINESS_BACKEND=kernel",
-    "sudo", "-E", "--", prepare, "--bundle", bundleFile, "--collector", trace, "--explore-collector", explore,
-    "--corpus", corpus, "--out", workset];
+  const args = ["--bundle", bundleFile, "--collector", trace, "--explore-collector", explore, "--corpus", corpus, "--out", workset];
   if (options.budget !== undefined) args.push("--budget", String(options.budget));
   for (const value of options.mainArgs) args.push("--main-arg", value);
   if (options.selfTest) args.push("--supplemental-arg=--self-test");
   console.log(sample.key + ": dynamic v2 acquisition");
+  const shellEnvironment = captureSampleRuntimeEnv(shell, env);
+  const callerUid = process.getuid?.(), callerGid = process.getgid?.();
+  if (callerUid === undefined || callerGid === undefined) throw new Error("POSIX caller uid/gid are unavailable");
+  const invocation = buildPrepareSudoCommand(prepare, args, shellEnvironment, callerUid, callerGid);
   refreshSudo(env);
-  requireSuccess(sample.key + " acquisition", run(nix, args, root, env));
+  requireSuccess(sample.key + " acquisition", run(invocation.command, invocation.args, root, env));
   if (!existsSync(workset) || jsonFile(workset).schema !== "atfield-workset-v2") throw new Error("acquisition did not produce a v2 workset: " + workset);
   return buildMode(sample, "protect", env);
 }
@@ -417,7 +464,7 @@ async function main(): Promise<number> {
     try {
       if (bundleFailure) throw new Error("implement bundle unavailable: " + bundleFailure);
       if (acquisitionFailure) throw new Error("acquisition package unavailable: " + acquisitionFailure);
-      sampleSizes.protect = prepareDynamic(sample, options, env, acquisition, bundle, runDir);
+      sampleSizes.protect = prepareDynamic(sample, options, env, acquisition, runDir);
     } catch (error) { recordFailure(sample, "protect", error); }
   }
 
