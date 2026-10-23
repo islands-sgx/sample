@@ -342,12 +342,20 @@ function printReport(samples: Sample[], runs: Run[], sizes: Map<string, Partial<
       return (value === null ? "FAIL" : Math.round(value).toString()) + " (" + successCount + "/" + trials + ")";
     };
     const paired = (numerator: Mode, denominator: Mode) => {
-      const top = selected(numerator), bottom = selected(denominator);
-      if (top.length !== trials || bottom.length !== trials || top.some((run) => run.status !== "success") || bottom.some((run) => run.status !== "success")) return "invalid";
-      const byTrial = new Map(bottom.map((run) => [run.trial, metric(run, sample)]));
-      const ratios = top.map((run) => metric(run, sample)! / byTrial.get(run.trial)!);
+      const byTrial = new Map<number, number>();
+      for (const run of selected(denominator)) {
+        const value = metric(run, sample);
+        if (run.status === "success" && value !== undefined && Number.isFinite(value) && value > 0) byTrial.set(run.trial, value);
+      }
+      const ratios: number[] = [];
+      for (const run of selected(numerator)) {
+        const value = metric(run, sample), baseline = byTrial.get(run.trial);
+        if (run.status === "success" && value !== undefined && Number.isFinite(value) && value > 0 && baseline !== undefined) {
+          ratios.push(value / baseline);
+        }
+      }
       const value = median(ratios);
-      return value === null || !Number.isFinite(value) ? "invalid" : value.toFixed(4) + " (" + ratios.length + " pairs)";
+      return value === null || !Number.isFinite(value) ? "invalid (0 pairs)" : value.toFixed(4) + " (" + ratios.length + "/" + trials + " pairs)";
     };
     const counts = modes.map((mode) => selected(mode).filter((run) => run.status === "failed").length).join("/");
     console.log([sample.key, sample.kind === "micro" ? "host_ecall_ns" : "host_wall_ns", cell("raw"), cell("protect"), cell("protect-naive"), paired("protect", "raw"), paired("protect-naive", "raw"), paired("protect", "protect-naive"), counts].join("\t"));
