@@ -2,10 +2,10 @@ cmake_minimum_required(VERSION 3.25)
 
 project(islands-sgx-sample LANGUAGES C CXX)
 
-set(ATFIELD_GROUP "anchor" CACHE STRING "Sample group: anchor, real, or bench")
-set_property(CACHE ATFIELD_GROUP PROPERTY STRINGS anchor real bench)
-if(NOT ATFIELD_GROUP MATCHES "^(anchor|real|bench)$")
-  message(FATAL_ERROR "ATFIELD_GROUP must be anchor, real, or bench")
+set(ATFIELD_GROUP "anchor" CACHE STRING "Sample group: anchor, bench/micro, or bench/application")
+set_property(CACHE ATFIELD_GROUP PROPERTY STRINGS anchor bench/micro bench/application)
+if(NOT ATFIELD_GROUP MATCHES "^(anchor|bench/micro|bench/application)$")
+  message(FATAL_ERROR "ATFIELD_GROUP must be anchor, bench/micro, or bench/application")
 endif()
 
 set(ATFIELD_MODE "raw" CACHE STRING "Build mode: raw, anchor, or protect")

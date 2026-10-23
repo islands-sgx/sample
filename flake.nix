@@ -26,7 +26,7 @@
       libraries = import ./flake/libraries.nix {
         inherit pkgs toolchain sgx;
       };
-      real = import ./flake/real.nix {
+      application = import ./flake/application.nix {
         inherit pkgs toolchain sgx;
       };
       anchorNames = [
@@ -35,7 +35,7 @@
         "sqlite"
         "yescrypt"
       ];
-      realNames = [
+      applicationNames = [
         "ehsm"
         "ehsm-opt-1"
         "ehsm-opt-2"
@@ -43,30 +43,34 @@
         "sgxwallet"
         "signal-cds"
       ];
-      benchNames = [
+      microNames = [
         "yescrypt-kdf-rw"
         "wolfssl-pbkdf2-sha256"
       ];
       anchorModes = [ "raw" "anchor" ];
-      realModes = [ "raw" "anchor" "protect" ];
+      benchModes = [ "raw" "anchor" "protect" ];
+      benchSamples = {
+        micro = microNames;
+        application = applicationNames;
+      };
       sourceEnv = {
         qe3 = {
-          QE3_SOURCE_ROOT = "${real.sources.qe3}";
+          QE3_SOURCE_ROOT = "${application.sources.qe3}";
         };
         ehsm = {
-          EHSM_SOURCE_ROOT = "${real.sources.ehsm}";
+          EHSM_SOURCE_ROOT = "${application.sources.ehsm}";
         };
         ehsm-opt-1 = {
-          EHSM_SOURCE_ROOT = "${real.sources.ehsmOpt1}";
+          EHSM_SOURCE_ROOT = "${application.sources.ehsmOpt1}";
         };
         ehsm-opt-2 = {
-          EHSM_SOURCE_ROOT = "${real.sources.ehsmOpt2}";
+          EHSM_SOURCE_ROOT = "${application.sources.ehsmOpt2}";
         };
         sgxwallet = {
-          SGXWALLET_SOURCE_ROOT = "${real.sources.sgxwallet}";
+          SGXWALLET_SOURCE_ROOT = "${application.sources.sgxwallet}";
         };
         signal-cds = {
-          SIGNAL_CDS_SOURCE_ROOT = "${real.sources.signalCds}";
+          SIGNAL_CDS_SOURCE_ROOT = "${application.sources.signalCds}";
         };
       };
       mkSampleShell =
@@ -77,16 +81,16 @@
           sampleLibraries =
             if group == "anchor" && name == "curve25519-donna" then
               [ libraries."curve25519-donna".${libraryMode} ]
-            else if (group == "anchor" && name == "yescrypt") || (group == "bench" && name == "yescrypt-kdf-rw") then
+            else if (group == "anchor" && name == "yescrypt") || (group == "bench/micro" && name == "yescrypt-kdf-rw") then
               [ libraries.yescrypt.${libraryMode} ]
-            else if group == "bench" && name == "wolfssl-pbkdf2-sha256" then
+            else if group == "bench/micro" && name == "wolfssl-pbkdf2-sha256" then
               [ libraries.wolfssl.${libraryMode} ]
-            else if group == "real" && (lib.hasPrefix "ehsm" name) then
-              [ real.libraries.sgxssl.${libraryMode} ]
-            else if group == "real" && name == "sgxwallet" then
+            else if group == "bench/application" && (lib.hasPrefix "ehsm" name) then
+              [ application.libraries.sgxssl.${libraryMode} ]
+            else if group == "bench/application" && name == "sgxwallet" then
               [
-                real.libraries.gmp.${libraryMode}
-                real.libraries.mcl.${libraryMode}
+                application.libraries.gmp.${libraryMode}
+                application.libraries.mcl.${libraryMode}
               ]
             else
               [ ];
@@ -162,21 +166,21 @@
           // lib.optionalAttrs (group == "anchor" && name == "curve25519-donna") {
             CURVE25519_DONNA_SGX_ROOT = "${builtins.head sampleLibraries}";
           }
-          // lib.optionalAttrs ((group == "anchor" && name == "yescrypt") || (group == "bench" && name == "yescrypt-kdf-rw")) {
+          // lib.optionalAttrs ((group == "anchor" && name == "yescrypt") || (group == "bench/micro" && name == "yescrypt-kdf-rw")) {
             YESCRYPT_SGX_ROOT = "${builtins.head sampleLibraries}";
           }
-          // lib.optionalAttrs (group == "bench" && name == "wolfssl-pbkdf2-sha256") {
+          // lib.optionalAttrs (group == "bench/micro" && name == "wolfssl-pbkdf2-sha256") {
             WOLFSSL_SGX_ROOT = "${builtins.head sampleLibraries}";
           }
-          // lib.optionalAttrs (group == "real" && (lib.hasPrefix "ehsm" name)) {
-            SGXSSL_ROOT = "${real.libraries.sgxssl.${libraryMode}}";
+          // lib.optionalAttrs (group == "bench/application" && (lib.hasPrefix "ehsm" name)) {
+            SGXSSL_ROOT = "${application.libraries.sgxssl.${libraryMode}}";
           }
-          // lib.optionalAttrs (group == "real" && name == "sgxwallet") {
-            SGX_GMP_ROOT = "${real.libraries.gmp.${libraryMode}}";
-            SGX_MCL_ROOT = "${real.libraries.mcl.${libraryMode}}";
+          // lib.optionalAttrs (group == "bench/application" && name == "sgxwallet") {
+            SGX_GMP_ROOT = "${application.libraries.gmp.${libraryMode}}";
+            SGX_MCL_ROOT = "${application.libraries.mcl.${libraryMode}}";
           }
           // protectEnv
-          // lib.optionalAttrs (group == "real") sourceEnv.${name};
+          // lib.optionalAttrs (group == "bench/application") sourceEnv.${name};
         };
       sampleShells = lib.listToAttrs (
         lib.concatMap (
@@ -184,11 +188,12 @@
           map (mode: lib.nameValuePair "anchor-${name}-${mode}" (mkSampleShell "anchor" name mode)) anchorModes
         ) anchorNames
         ++ lib.concatMap (
-          name: map (mode: lib.nameValuePair "real-${name}-${mode}" (mkSampleShell "real" name mode)) realModes
-        ) realNames
-        ++ lib.concatMap (
-          name: map (mode: lib.nameValuePair "bench-${name}-${mode}" (mkSampleShell "bench" name mode)) realModes
-        ) benchNames
+          scale:
+          lib.concatMap (
+            name:
+            map (mode: lib.nameValuePair "bench-${scale}-${name}-${mode}" (mkSampleShell "bench/${scale}" name mode)) benchModes
+          ) benchSamples.${scale}
+        ) [ "micro" "application" ]
       );
       packageOutputs = {
         atfield-bundle = toolchain.implementBundle;
@@ -197,13 +202,13 @@
         curve25519-donna-sgx-anchor = libraries."curve25519-donna".anchor;
         curve25519-donna-sgx-raw = libraries."curve25519-donna".raw;
         enclave-clang = toolchain.enclaveCompiler;
-        intel-sgx-gmp-anchor = real.libraries.gmp.anchor;
-        intel-sgx-gmp-raw = real.libraries.gmp.raw;
-        intel-sgx-ssl-anchor = real.libraries.sgxssl.anchor;
-        intel-sgx-ssl-raw = real.libraries.sgxssl.raw;
+        intel-sgx-gmp-anchor = application.libraries.gmp.anchor;
+        intel-sgx-gmp-raw = application.libraries.gmp.raw;
+        intel-sgx-ssl-anchor = application.libraries.sgxssl.anchor;
+        intel-sgx-ssl-raw = application.libraries.sgxssl.raw;
         lld = toolchain.lld;
-        mcl-sgx-anchor = real.libraries.mcl.anchor;
-        mcl-sgx-raw = real.libraries.mcl.raw;
+        mcl-sgx-anchor = application.libraries.mcl.anchor;
+        mcl-sgx-raw = application.libraries.mcl.raw;
         sgx-psw = sgx.psw;
         sgx-psw-readiness = sgx.protect.psw;
         sgx-sdk = sgx.sdk;

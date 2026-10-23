@@ -4,7 +4,7 @@ import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSyn
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-type Group = "anchor" | "real" | "bench";
+type Group = "anchor" | "bench/micro" | "bench/application";
 type Mode = "raw" | "anchor" | "protect";
 type Action = "build" | "run";
 interface Sample { action: Action; group: Group; name: string; mode: Mode; hostArgs: string[]; }
@@ -23,7 +23,9 @@ function parseArgs(args: string[]): Sample {
   if (action !== "build" && action !== "run") fail(usage);
   if (args.length < 4 || (action === "build" && args.length !== 4)) fail(usage);
   const [, groupArg, name, modeArg, ...hostArgs] = args;
-  if (groupArg !== "anchor" && groupArg !== "real" && groupArg !== "bench") fail("GROUP must be anchor or real (or bench)");
+  if (groupArg !== "anchor" && groupArg !== "bench/micro" && groupArg !== "bench/application") {
+    fail("GROUP must be anchor, bench/micro, or bench/application");
+  }
   if (modeArg !== "raw" && modeArg !== "anchor" && modeArg !== "protect") fail("MODE must be raw, anchor, or protect");
   if (groupArg === "anchor" && modeArg === "protect") fail("anchor demonstrations have no Field or protect mode");
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) fail("NAME must use lower-case words separated by hyphens");
@@ -81,7 +83,7 @@ function ensureNixShell(sample: Sample): void {
     return;
   }
 
-  const shellName = `${sample.group}-${sample.name}-${sample.mode}`;
+  const shellName = `${sample.group.replace("/", "-")}-${sample.name}-${sample.mode}`;
   const envArgs = [`ATFIELD_SAMPLE_SHELL=${marker}`];
   if (sample.mode === "protect" && process.env.ATFIELD_IMPLEMENT_ROOT) {
     envArgs.push(`ATFIELD_IMPLEMENT_ROOT=${process.env.ATFIELD_IMPLEMENT_ROOT}`);

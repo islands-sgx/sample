@@ -15,7 +15,7 @@ function(bench_add_sample)
     set(ARG_PROFILE DEBUG)
   endif()
 
-  set(_BENCH_COMMON_DIRECTORY "${CMAKE_SOURCE_DIR}/bench/common")
+  set(_BENCH_COMMON_DIRECTORY "${CMAKE_SOURCE_DIR}/bench/micro/common")
   foreach(_BENCH_FILE IN ITEMS sample.c Enclave.config.xml)
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_BENCH_FILE}")
       message(FATAL_ERROR "${ARG_NAME}: missing ${CMAKE_CURRENT_SOURCE_DIR}/${_BENCH_FILE}")

@@ -1,6 +1,6 @@
 { pkgs, toolchain, sgx }:
 let
-  sgxSources = import ./real-sources.nix { inherit pkgs; };
+  sgxSources = import ./application-sources.nix { inherit pkgs; };
   sgxSsl = mode: pkgs.callPackage ./package/sgxssl.nix {
     inherit (toolchain) stdenv;
     llvmTools = toolchain.atfieldLlc;
@@ -36,38 +36,38 @@ in
     signalCds = pkgs.applyPatches {
       name = "${sgxSources.signalCds.name}-clang";
       src = sgxSources.signalCds;
-      patches = [ ../real/signal-cds/patches/clang.patch ];
+      patches = [ ../bench/application/signal-cds/patches/clang.patch ];
     };
     ehsm = pkgs.applyPatches {
       name = "${sgxSources.ehsm.name}-clang";
       src = sgxSources.ehsm;
       patches = [
-        ../real/ehsm/patches/clang.patch
-        ../real/ehsm/patches/bounds.patch
+        ../bench/application/ehsm/patches/clang.patch
+        ../bench/application/ehsm/patches/bounds.patch
       ];
     };
     ehsmOpt1 = pkgs.applyPatches {
       name = "${sgxSources.ehsm.name}-opt-1-clang";
       src = sgxSources.ehsm;
       patches = [
-        ../real/ehsm-opt-1/patches/clang.patch
-        ../real/ehsm-opt-1/patches/bounds.patch
+        ../bench/application/ehsm-opt-1/patches/clang.patch
+        ../bench/application/ehsm-opt-1/patches/bounds.patch
       ];
     };
     ehsmOpt2 = pkgs.applyPatches {
       name = "${sgxSources.ehsm.name}-opt-2-clang";
       src = sgxSources.ehsm;
       patches = [
-        ../real/ehsm-opt-2/patches/clang.patch
-        ../real/ehsm-opt-2/patches/bounds.patch
+        ../bench/application/ehsm-opt-2/patches/clang.patch
+        ../bench/application/ehsm-opt-2/patches/bounds.patch
       ];
     };
     sgxwallet = pkgs.applyPatches {
       name = "${sgxSources.sgxwallet.name}-clang";
       src = sgxSources.sgxwallet;
       patches = [
-        ../real/sgxwallet/patches/clang.patch
-        ../real/sgxwallet/patches/bounds.patch
+        ../bench/application/sgxwallet/patches/clang.patch
+        ../bench/application/sgxwallet/patches/bounds.patch
       ];
     };
   };

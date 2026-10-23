@@ -1,4 +1,4 @@
-include("${CMAKE_SOURCE_DIR}/bench/common/BenchSample.cmake")
+include("${CMAKE_SOURCE_DIR}/bench/micro/common/BenchSample.cmake")
 
 find_path(
   YESCRYPT_SGX_ROOT

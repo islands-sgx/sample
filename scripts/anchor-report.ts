@@ -4,7 +4,11 @@ import { resolve } from "node:path";
 
 const PAGE = 4096;
 const anchorSamples = ["curve25519-donna", "fiat-p384", "yescrypt", "sqlite"];
-const realSamples = ["qe3", "ehsm", "sgxwallet", "signal-cds"];
+const benchSamples = [
+  ...["yescrypt-kdf-rw", "wolfssl-pbkdf2-sha256"].map(name => ({ group: "bench/micro" as const, name })),
+  ...["ehsm", "ehsm-opt-1", "ehsm-opt-2", "qe3", "sgxwallet", "signal-cds"]
+    .map(name => ({ group: "bench/application" as const, name })),
+];
 const wrapper = Buffer.from([0x0f, 0x1f, 0x80, 0xc3, 0, 0, 0]);
 const hash = (data: Buffer) => createHash("sha256").update(data).digest("hex");
 const page = (n: number) => Math.floor(n / PAGE) * PAGE;
@@ -254,7 +258,7 @@ export function validateCurrentRun(
     run.hostSha256 === hash(host), name + "/" + mode + ": missing successful current-artifact run");
 }
 
-async function inspectPair(root: string, group: "anchor" | "real", name: string) {
+async function inspectPair(root: string, group: "anchor" | "bench/micro" | "bench/application", name: string) {
   const pair = [];
   for (const mode of ["raw", "anchor"] as const) {
     const dir = resolve(root, group, name, mode);
@@ -290,16 +294,16 @@ async function inspectPair(root: string, group: "anchor" | "real", name: string)
 }
 
 export async function generateReport(
-  root: string, includeReal = false, inspectSample: typeof inspectPair = inspectPair,
+  root: string, includeBench = false, inspectSample: typeof inspectPair = inspectPair,
 ) {
   root = resolve(root);
   const rows = [];
   for (const name of anchorSamples) {
     rows.push(await inspectSample(root, "anchor", name));
   }
-  if (includeReal) {
-    for (const name of realSamples) {
-      rows.push(await inspectSample(root, "real", name));
+  if (includeBench) {
+    for (const { group, name } of benchSamples) {
+      rows.push(await inspectSample(root, group, name));
     }
   }
   const table = render(rows);
@@ -310,10 +314,10 @@ export async function generateReport(
 }
 
 export async function main(args = process.argv.slice(2)) {
-  let root = "build", includeReal = false, sawRoot = false;
+  let root = "build", includeBench = false, sawRoot = false;
   for (const arg of args) {
-    if (arg === "--include-real") {
-      includeReal = true;
+    if (arg === "--include-bench") {
+      includeBench = true;
     } else if (!arg.startsWith("-") && !sawRoot) {
       root = arg;
       sawRoot = true;
@@ -321,7 +325,7 @@ export async function main(args = process.argv.slice(2)) {
       throw new Error(`unexpected anchor-report argument: ${arg}`);
     }
   }
-  const { table } = await generateReport(root, includeReal);
+  const { table } = await generateReport(root, includeBench);
   console.log(table);
 }
 

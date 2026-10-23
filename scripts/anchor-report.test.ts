@@ -24,16 +24,16 @@ function fakePair(name: string) {
   };
 }
 
-test("anchor-only report ignores stale and partial real run caches", async () => {
+test("anchor-only report ignores stale and partial bench run caches", async () => {
   const root = join(temporary, "anchor-only");
-  mkdirSync(join(root, "real", "qe3", "raw"), { recursive: true });
-  mkdirSync(join(root, "real", "qe3", "anchor"), { recursive: true });
-  writeFileSync(join(root, "real", "qe3", "raw", "run.json"), JSON.stringify({
+  mkdirSync(join(root, "bench", "application", "qe3", "raw"), { recursive: true });
+  mkdirSync(join(root, "bench", "application", "qe3", "anchor"), { recursive: true });
+  writeFileSync(join(root, "bench", "application", "qe3", "raw", "run.json"), JSON.stringify({
     exitCode: 0, imageSha256: "stale", hostSha256: "stale",
   }));
-  writeFileSync(join(root, "real", "qe3", "anchor", "run.json"), "{partial");
+  writeFileSync(join(root, "bench", "application", "qe3", "anchor", "run.json"), "{partial");
   const calls: string[] = [];
-  const inspectSample = async (_root: string, group: "anchor" | "real", name: string) => {
+  const inspectSample = async (_root: string, group: "anchor" | "bench/micro" | "bench/application", name: string) => {
     calls.push(group + "/" + name);
     return fakePair(name);
   };
@@ -47,12 +47,12 @@ test("anchor-only report ignores stale and partial real run caches", async () =>
   expect(table).not.toContain("| qe3 |");
 });
 
-test("explicit real inclusion propagates stale current-artifact failure", async () => {
-  const root = join(temporary, "include-real");
+test("explicit bench inclusion reaches both scales and propagates stale current-artifact failure", async () => {
+  const root = join(temporary, "include-bench");
   const calls: string[] = [];
-  const inspectSample = async (_root: string, group: "anchor" | "real", name: string) => {
+  const inspectSample = async (_root: string, group: "anchor" | "bench/micro" | "bench/application", name: string) => {
     calls.push(group + "/" + name);
-    if (group === "real" && name === "qe3") {
+    if (group === "bench/application" && name === "qe3") {
       throw new Error("qe3/raw: missing successful current-artifact run");
     }
     return fakePair(name);
@@ -63,7 +63,10 @@ test("explicit real inclusion propagates stale current-artifact failure", async 
   expect(calls.slice(0, 4)).toEqual([
     "anchor/curve25519-donna", "anchor/fiat-p384", "anchor/yescrypt", "anchor/sqlite",
   ]);
-  expect(calls[4]).toBe("real/qe3");
+  expect(calls.slice(4, 6)).toEqual([
+    "bench/micro/yescrypt-kdf-rw", "bench/micro/wolfssl-pbkdf2-sha256",
+  ]);
+  expect(calls).toContain("bench/application/qe3");
 });
 
 test("run validation rejects stale image and host hashes", () => {

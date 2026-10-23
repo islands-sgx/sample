@@ -23,13 +23,13 @@ function invoke(args: string[], extraEnv: Record<string, string> = {}): Result {
 
 describe("sample CLI rejects invalid requests before entering Nix", () => {
   test.each([
-    { args: ["build", "other", "yescrypt", "raw"], message: "GROUP must be anchor or real" },
+    { args: ["build", "other", "yescrypt", "raw"], message: "GROUP must be anchor, bench/micro, or bench/application" },
     { args: ["build", "anchor", "yescrypt", "invalid"], message: "MODE must be raw, anchor, or protect" },
     { args: ["build", "anchor", "yescrypt", "protect"], message: "anchor demonstrations have no Field or protect mode" },
     { args: ["build", "anchor", "Bad_Name", "raw"], message: "NAME must use lower-case words separated by hyphens" },
     { args: ["build", "anchor", "not-a-sample", "raw"], message: "unknown anchor sample: not-a-sample" },
-    { args: ["build", "real", "sqlite", "raw"], message: "unknown real sample: sqlite" },
-    { args: ["build", "bench", "sqlite", "raw"], message: "unknown bench sample: sqlite" },
+    { args: ["build", "bench/application", "sqlite", "raw"], message: "unknown bench/application sample: sqlite" },
+    { args: ["build", "bench/micro", "sqlite", "raw"], message: "unknown bench/micro sample: sqlite" },
   ])("rejects $args", ({ args, message }) => {
     const result = invoke(args);
     expect(result.exitCode).toBe(64);
@@ -53,9 +53,17 @@ describe("sample CLI rejects invalid requests before entering Nix", () => {
     { env: { ATFIELD_READINESS_BACKEND: "invalid" }, message: "ATFIELD_READINESS_BACKEND must be 'kernel' or 'userspace'" },
     { env: { ATFIELD_HOST_RUNNER: "off" }, message: "requires explicit ATFIELD_READINESS_BACKEND=userspace" },
   ])("rejects protect runner configuration $env", ({ env, message }) => {
-    const result = invoke(["run", "real", "ehsm", "protect"], env);
+    const result = invoke(["run", "bench/application", "ehsm", "protect"], env);
     expect(result.exitCode).toBe(64);
     expect(result.stderr).toContain(message);
+  });
+
+  test("micro protect uses the same runner validation", () => {
+    const result = invoke(["run", "bench/micro", "yescrypt-kdf-rw", "protect"], {
+      ATFIELD_HOST_RUNNER: "invalid",
+    });
+    expect(result.exitCode).toBe(64);
+    expect(result.stderr).toContain("ATFIELD_HOST_RUNNER must be 'on' or 'off'");
   });
 });
 
