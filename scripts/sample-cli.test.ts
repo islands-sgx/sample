@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { validateRunnerLibraryPath } from "./sample";
+import { isProfileFinalCacheTransition, validateRunnerLibraryPath } from "./sample";
 
 const cli = join(import.meta.dir, "sample.ts");
 
@@ -81,4 +81,28 @@ test("protect runner rejects a missing LD_LIBRARY_PATH component", () => {
   expect(() => validateRunnerLibraryPath(missingDirectory)).toThrow(
     "protect runner only accepts existing Nix store library directories in LD_LIBRARY_PATH",
   );
+});
+
+
+describe("Profile/Final CMake cache transitions", () => {
+  const finalWorkset = "/tmp/sample-workset.json";
+
+  test("reuses the same protect cache through Profile → Final → Profile", () => {
+    expect(isProfileFinalCacheTransition("ON", "", "OFF", finalWorkset, finalWorkset)).toBe(true);
+    expect(isProfileFinalCacheTransition("OFF", finalWorkset, "ON", "", finalWorkset)).toBe(true);
+  });
+
+  test.each([
+    { cachedProfileOnly: "OFF", cachedWorkset: "/tmp/stale-workset.json", wantedProfileOnly: "ON" as const, wantedWorkset: "" },
+    { cachedProfileOnly: "ON", cachedWorkset: "", wantedProfileOnly: "OFF" as const, wantedWorkset: "/tmp/other-workset.json" },
+    { cachedProfileOnly: "OFF", cachedWorkset: finalWorkset, wantedProfileOnly: "OFF" as const, wantedWorkset: finalWorkset },
+  ])("rejects unrelated cache state $cachedProfileOnly/$cachedWorkset", (state) => {
+    expect(isProfileFinalCacheTransition(
+      state.cachedProfileOnly,
+      state.cachedWorkset,
+      state.wantedProfileOnly,
+      state.wantedWorkset,
+      finalWorkset,
+    )).toBe(false);
+  });
 });

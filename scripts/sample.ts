@@ -127,6 +127,22 @@ function frozenWorkset(sample: Sample, buildDir: string): string {
   return configured ? resolve(configured) : join(buildDir, "workset.dynamic.v2.json");
 }
 
+export function isProfileFinalCacheTransition(
+  cachedProfileOnly: string | undefined,
+  cachedWorkset: string | undefined,
+  wantedProfileOnly: "ON" | "OFF",
+  wantedWorkset: string,
+  expectedFinalWorkset: string,
+): boolean {
+  return (
+    cachedProfileOnly === "ON" && cachedWorkset === "" &&
+      wantedProfileOnly === "OFF" && wantedWorkset === expectedFinalWorkset
+  ) || (
+    cachedProfileOnly === "OFF" && cachedWorkset === expectedFinalWorkset &&
+      wantedProfileOnly === "ON" && wantedWorkset === ""
+  );
+}
+
 function requireFrozenWorkset(sample: Sample, buildDir: string): string {
   if (sample.mode === "protect-naive") return "";
   const path = frozenWorkset(sample, buildDir);
@@ -182,7 +198,11 @@ function buildSample(sample: Sample): void {
       return line?.slice(line.indexOf("=") + 1);
     };
     const cachedWorkset = cacheValue("ATFIELD_FROZEN_WORKSET");
-    const profileToFinal = sample.mode === "protect" && worksetPath && cachedWorkset === "";
+    const wantedProfileOnly = dynamicProfile ? "ON" : "OFF";
+    const cacheTransition = sample.mode === "protect" && isProfileFinalCacheTransition(
+      cacheValue("ATFIELD_PROFILE_ONLY"), cachedWorkset, wantedProfileOnly, worksetPath,
+      frozenWorkset(sample, buildDir),
+    );
     const wantRoots = cmakeArgs.map((arg) => {
       const assignment = arg.slice(2);
       const equals = assignment.indexOf("=");
@@ -192,7 +212,7 @@ function buildSample(sample: Sample): void {
       cacheValue("CMAKE_C_COMPILER") !== tool.ATFIELD_CC ||
       cacheValue("ATFIELD_IMPLEMENT_ROOT") !== tool.ATFIELD_IMPLEMENT_ROOT ||
       cacheValue("SGX_SDK_ROOT") !== tool.SGX_SDK_ROOT ||
-      (cachedWorkset !== worksetPath && !profileToFinal) ||
+      ((cachedWorkset !== worksetPath || cacheValue("ATFIELD_PROFILE_ONLY") !== wantedProfileOnly) && !cacheTransition) ||
       wantRoots.some(([name, value]) => cacheValue(name) !== value)
     ) {
       const preservedBuildDir = `${buildDir}.cache-mismatch-${Date.now()}-${randomUUID()}`;
