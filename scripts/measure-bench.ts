@@ -59,12 +59,12 @@ function parseArgs(argv: string[]): Options | { help: true } {
     }
     const value = argv[++i];
     if (value === undefined) throw new Error(arg + " requires a value");
+    if (arg === "--csv") { options.csv = value; continue; }
     const number = Number(value);
     if (!/^\d+$/.test(value) || !Number.isSafeInteger(number)) throw new Error(arg + " must be an integer");
     if (arg === "--trials" && number >= 1 && number <= 1000) options.trials = number;
     else if (arg === "--seed" && number <= 0xffffffff) options.seed = number || 0x9e3779b9;
     else if (arg === "--acquire-budget" && number >= 1 && number <= 100000) options.budget = number;
-    else if (arg === "--csv") options.csv = value;
     else if (["--trials", "--seed", "--acquire-budget"].includes(arg)) throw new Error(arg + " is outside range");
     else throw new Error("unknown option " + arg);
   }
