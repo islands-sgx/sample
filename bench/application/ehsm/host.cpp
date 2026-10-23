@@ -374,11 +374,106 @@ static void run_self_tests(sgx_enclave_id_t eid)
     std::puts("eHSM self-test: PASS");
 }
 
+static void run_compat_check(sgx_enclave_id_t eid, Key &aes_key, Data &aad,
+                             Data &plain, Data &cipher)
+{
+    const uint32_t aes_overhead = EH_AES_GCM_IV_SIZE + EH_AES_GCM_MAC_SIZE;
+    sgx_status_t result = SGX_ERROR_UNEXPECTED;
+    sgx_status_t transport = SGX_SUCCESS;
+
+    Key query_key(0);
+    query_key.get()->metadata.origin = EH_INTERNAL_KEY;
+    query_key.get()->metadata.keyspec = EH_AES_GCM_256;
+    query_key.get()->metadata.keyusage = EH_KEYUSAGE_ENCRYPT_DECRYPT;
+    query_key.get()->keybloblen = 0;
+    transport = enclave_create_key(eid, &result, query_key.get(), query_key.size());
+    checked("create_key size query", transport, result);
+    if (query_key.get()->keybloblen != EH_AES_GCM_256_SIZE)
+        throw Failure{};
+
+    Data enc_query = data_buffer(0);
+    transport = enclave_encrypt(eid, &result, aes_key.get(), aes_key.size(),
+                                aad.get(), aad.size(), plain.get(), plain.size(),
+                                enc_query.get(), enc_query.size());
+    checked("encrypt size query", transport, result);
+    if (enc_query.get()->datalen != plain.get()->datalen + aes_overhead)
+        throw Failure{};
+
+    Data dec_query = data_buffer(0);
+    transport = enclave_decrypt(eid, &result, aes_key.get(), aes_key.size(),
+                                aad.get(), aad.size(), cipher.get(), cipher.size(),
+                                dec_query.get(), dec_query.size());
+    checked("decrypt size query", transport, result);
+    if (dec_query.get()->datalen != plain.get()->datalen)
+        throw Failure{};
+
+    Data short_cipher = data_buffer(aes_overhead - 1);
+    Data dummy_out = data_buffer(16);
+    transport = enclave_decrypt(eid, &result, aes_key.get(), aes_key.size(),
+                                aad.get(), aad.size(), short_cipher.get(),
+                                short_cipher.size(), dummy_out.get(), dummy_out.size());
+    expected_invalid_parameter("decrypt short ciphertext", transport, result);
+}
+
+static void run_sm4_producer_consumer_check(sgx_enclave_id_t eid, Data &aad)
+{
+    sgx_status_t result = SGX_ERROR_UNEXPECTED;
+    sgx_status_t transport = SGX_SUCCESS;
+
+    Key sm4_query(0);
+    sm4_query.get()->metadata.origin = EH_INTERNAL_KEY;
+    sm4_query.get()->metadata.keyspec = EH_SM4_CTR;
+    sm4_query.get()->metadata.keyusage = EH_KEYUSAGE_ENCRYPT_DECRYPT;
+    sm4_query.get()->keybloblen = 0;
+    transport = enclave_create_key(eid, &result, sm4_query.get(), sm4_query.size());
+    checked("SM4 create_key size query", transport, result);
+    if (sm4_query.get()->keybloblen == 0)
+        throw Failure{};
+
+    Key sm4_key(sm4_query.get()->keybloblen);
+    sm4_key.get()->metadata = sm4_query.get()->metadata;
+    sm4_key.get()->keybloblen = sm4_query.get()->keybloblen;
+    transport = enclave_create_key(eid, &result, sm4_key.get(), sm4_key.size());
+    checked("SM4 create_key", transport, result);
+
+    Data datakey_plain = data_buffer(16);
+    Data datakey_cipher_query = data_buffer(0);
+    transport = enclave_generate_datakey(
+        eid, &result, sm4_key.get(), sm4_key.size(), aad.get(), aad.size(),
+        datakey_plain.get(), datakey_plain.size(), datakey_cipher_query.get(),
+        datakey_cipher_query.size());
+    checked("SM4 generate_datakey size query", transport, result);
+    if (datakey_cipher_query.get()->datalen !=
+        datakey_plain.get()->datalen + SGX_SM4_IV_SIZE)
+        throw Failure{};
+
+    Data datakey_cipher = data_buffer(datakey_cipher_query.get()->datalen);
+    transport = enclave_generate_datakey(
+        eid, &result, sm4_key.get(), sm4_key.size(), aad.get(), aad.size(),
+        datakey_plain.get(), datakey_plain.size(), datakey_cipher.get(),
+        datakey_cipher.size());
+    checked("SM4 generate_datakey", transport, result);
+
+    if (datakey_cipher.get()->datalen <= SGX_SM4_IV_SIZE)
+        throw Failure{};
+    const uint32_t plain_len = datakey_cipher.get()->datalen - SGX_SM4_IV_SIZE;
+    if (plain_len != datakey_plain.get()->datalen)
+        throw Failure{};
+    Data restored = data_buffer(plain_len);
+    transport = enclave_decrypt(
+        eid, &result, sm4_key.get(), sm4_key.size(), aad.get(), aad.size(),
+        datakey_cipher.get(), datakey_cipher.size(), restored.get(), restored.size());
+    checked("SM4 decrypt generated datakey", transport, result);
+    require_equal("SM4-CTR generated datakey", restored, datakey_plain);
+}
+
 struct Options {
     size_t bytes = 32;
     size_t requests = 2;
     std::string domain_key = "domain-key.sealed";
     bool self_test = false;
+    bool compat_check = false;
+    bool sm4_check = false;
     bool help = false;
 };
 
@@ -386,7 +481,7 @@ static void usage(const char *program)
 {
     std::fprintf(stderr,
                  "usage: %s [--bytes N] [--requests N] [--domain-key PATH] "
-                 "[--self-test]\n",
+                 "[--self-test] [--compat-check] [--sm4-check]\n",
                  program);
 }
 
@@ -411,6 +506,14 @@ static bool parse_size(const char *text, size_t *value)
 static bool parse_options(int argc, char **argv, Options *options)
 {
     for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--compat-check") == 0) {
+            options->compat_check = true;
+            continue;
+        }
+        if (std::strcmp(argv[i], "--sm4-check") == 0) {
+            options->sm4_check = true;
+            continue;
+        }
         if (std::strcmp(argv[i], "--help") == 0) {
             options->help = true;
             usage(argv[0]);
@@ -446,7 +549,8 @@ static bool parse_options(int argc, char **argv, Options *options)
     }
 
     if (options->bytes == 0 || options->bytes > EH_ENCRYPT_MAX_SIZE ||
-        options->requests == 0) {
+        options->requests == 0 ||
+        (options->self_test && (options->compat_check || options->sm4_check))) {
         usage(argv[0]);
         return false;
     }
@@ -539,6 +643,10 @@ static int run(const Options &options)
         reject_plaintext_length(enclave.id(), key, aad, 0);
         reject_plaintext_length(enclave.id(), key, aad,
                                 EH_ENCRYPT_MAX_SIZE + 1);
+        if (options.compat_check)
+            run_compat_check(enclave.id(), key, aad, plaintext, saved_cipher);
+        if (options.sm4_check)
+            run_sm4_producer_consumer_check(enclave.id(), aad);
 
         checked("destroy enclave", enclave.close(), SGX_SUCCESS);
     }

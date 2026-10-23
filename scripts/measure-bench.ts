@@ -18,7 +18,7 @@ type Run = Task & {
 type Size = { enclaveBytes: number; ptLoadFileBytes: number | null; ptLoadMemoryBytes: number | null; executablePages: number | null };
 type Sizes = Record<Mode, Size>;
 type Result = { code: number; stdout: string; stderr: string; error: string };
-type Options = { trials: number; seed: number; budget: number | undefined; mainArgs: string[]; selfTest: boolean; csv: string | undefined; dryRun: boolean };
+type Options = { trials: number; seed: number; budget: number | undefined; samples: string[]; mainArgs: string[]; supplemental: boolean; csv: string | undefined; dryRun: boolean };
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes: Mode[] = ["raw", "protect", "protect-naive"];
@@ -38,23 +38,30 @@ function command(name: string): string {
 }
 
 function usage(): string {
-  return "usage: bun scripts/measure-bench.ts [--trials N] [--seed N] [--acquire-budget N] [--main-arg ARG] [--no-self-test] [--csv FILE] [--dry-run]";
+  return "usage: bun scripts/measure-bench.ts [--sample GROUP/NAME] [--trials N] [--seed N] [--acquire-budget N] [--main-arg ARG] [--no-supplemental] [--csv FILE] [--dry-run]";
 }
 
 function parseArgs(argv: string[]): Options | { help: true } {
   const options = {
     trials: 5, seed: randomBytes(4).readUInt32LE(0) || 1, budget: undefined as number | undefined,
-    mainArgs: [] as string[], selfTest: true, csv: undefined as string | undefined, dryRun: false,
+    samples: [] as string[], mainArgs: [] as string[], supplemental: true,
+    csv: undefined as string | undefined, dryRun: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--help" || arg === "-h") return { help: true as const };
     if (arg === "--dry-run") { options.dryRun = true; continue; }
-    if (arg === "--no-self-test") { options.selfTest = false; continue; }
+    if (arg === "--no-supplemental") { options.supplemental = false; continue; }
     if (arg === "--main-arg") {
       const value = argv[++i];
       if (value === undefined) throw new Error("--main-arg requires a value");
       options.mainArgs.push(value);
+      continue;
+    }
+    if (arg === "--sample") {
+      const value = argv[++i];
+      if (value === undefined || value.startsWith("--")) throw new Error("--sample requires GROUP/NAME");
+      options.samples.push(value);
       continue;
     }
     const value = argv[++i];
@@ -84,6 +91,14 @@ function discoverSamples(): Sample[] {
   }
   if (!samples.length) throw new Error("no bench sample directories with CMakeLists.txt were found");
   return samples;
+}
+
+function supplementalCommands(sample: Sample): string[][] {
+  if (sample.group === "bench/application" &&
+      ["ehsm", "ehsm-opt-1", "ehsm-opt-2"].includes(sample.name)) {
+    return [["--self-test"], ["--compat-check"], ["--sm4-check"]];
+  }
+  return [["--self-test"]];
 }
 
 function run(cmd: string, args: string[], cwd = root, env: Record<string, string | undefined> = process.env, maxBuffer = 64 * 1024 * 1024): Result {
@@ -290,7 +305,11 @@ function prepareDynamic(sample: Sample, options: Options, env: Record<string, st
   const args = ["--bundle", bundleFile, "--collector", trace, "--explore-collector", explore, "--corpus", corpus, "--out", workset];
   if (options.budget !== undefined) args.push("--budget", String(options.budget));
   for (const value of options.mainArgs) args.push("--main-arg", value);
-  if (options.selfTest) args.push("--supplemental-arg=--self-test");
+  if (options.supplemental) {
+    for (const command of supplementalCommands(sample)) {
+      args.push("--supplemental-command", JSON.stringify(command));
+    }
+  }
   console.log(sample.key + ": dynamic v2 acquisition");
   const shellEnvironment = captureSampleRuntimeEnv(shell, env);
   const callerUid = process.getuid?.(), callerGid = process.getgid?.();
@@ -402,12 +421,21 @@ async function main(): Promise<number> {
   catch (error) { console.error(error instanceof Error ? error.message : String(error)); console.error(usage()); return 2; }
   if ("help" in options) { console.log(usage()); return 0; }
   let samples: Sample[];
-  try { samples = discoverSamples(); }
+  try {
+    const discovered = discoverSamples();
+    const selected = new Set(options.samples);
+    samples = selected.size ? discovered.filter((sample) => selected.has(sample.key)) : discovered;
+    if (samples.length !== selected.size && selected.size) {
+      throw new Error("unknown --sample: " + [...selected].filter((key) => !samples.some((sample) => sample.key === key)).join(", "));
+    }
+  }
   catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 2; }
   const tasks = schedule(samples, options.trials, options.seed);
   if (options.dryRun) {
     console.log(JSON.stringify({ samples: samples.map((sample) => sample.key), modes, trials: options.trials, seed: options.seed,
-      default_main_args: options.mainArgs, supplemental_self_test: options.selfTest,
+      default_main_args: options.mainArgs,
+      supplemental_commands: Object.fromEntries(samples.map((sample) =>
+        [sample.key, options.supplemental ? supplementalCommands(sample) : []])),
       first_scheduled_runs: tasks.slice(0, 12).map((task) => [task.trial, task.sample.key, task.mode]) }, null, 2));
     return 0;
   }
@@ -416,7 +444,8 @@ async function main(): Promise<number> {
   const runDir = path.join(root, "build", "bench", "measure", runId);
   mkdirSync(runDir, { recursive: true });
   console.log("Benchmark " + runId + ": " + samples.length + " samples, " + options.trials + " paired trials, seed " + options.seed);
-  console.log("Main arguments " + JSON.stringify(options.mainArgs) + "; supplemental --self-test " + (options.selfTest ? "enabled" : "disabled") + "; acquisition budget " + (options.budget ?? "helper default"));
+  console.log("Main arguments " + JSON.stringify(options.mainArgs) + "; supplemental checks " +
+    (options.supplemental ? "enabled" : "disabled") + "; acquisition budget " + (options.budget ?? "helper default"));
   console.log("Run artifacts: " + runDir);
   const env: Record<string, string | undefined> = { ...process.env, ATFIELD_BENCH_LEASE_ALL: "1", ATFIELD_HOST_RUNNER: "on", ATFIELD_READINESS_BACKEND: "kernel" };
   delete env.ATFIELD_FROZEN_WORKSET;
