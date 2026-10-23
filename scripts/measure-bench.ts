@@ -1,0 +1,513 @@
+#!/usr/bin/env bun
+import {
+  accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync,
+  rmSync, statSync, writeFileSync,
+} from "node:fs";
+import { randomBytes } from "node:crypto";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+type Mode = "raw" | "protect" | "protect-naive";
+type Sample = { group: "bench/micro" | "bench/application"; kind: "micro" | "application"; name: string; key: string };
+type Task = { sample: Sample; trial: number; mode: Mode };
+type Run = Task & {
+  status: "success" | "failed"; hostWallNs?: number; hostEcallNs?: number;
+  enclaveTicks?: number; iterations?: number; error?: string;
+};
+type Size = { enclaveBytes: number; ptLoadFileBytes: number | null; ptLoadMemoryBytes: number | null; executablePages: number | null };
+type Sizes = Record<Mode, Size>;
+type Result = { code: number; stdout: string; stderr: string; error: string };
+type Options = { trials: number; seed: number; budget: number | undefined; mainArgs: string[]; selfTest: boolean; csv: string | undefined; dryRun: boolean };
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const modes: Mode[] = ["raw", "protect", "protect-naive"];
+const groups = [
+  { group: "bench/micro" as const, kind: "micro" as const },
+  { group: "bench/application" as const, kind: "application" as const },
+];
+const bun = command("bun");
+const nix = command("nix");
+
+function command(name: string): string {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    const candidate = path.join(dir, name);
+    try { accessSync(candidate, constants.X_OK); return candidate; } catch {}
+  }
+  throw new Error("missing command in PATH: " + name);
+}
+
+function usage(): string {
+  return "usage: bun scripts/measure-bench.ts [--trials N] [--seed N] [--acquire-budget N] [--main-arg ARG] [--no-self-test] [--csv FILE] [--dry-run]";
+}
+
+function parseArgs(argv: string[]): Options | { help: true } {
+  const options = {
+    trials: 5, seed: randomBytes(4).readUInt32LE(0) || 1, budget: undefined as number | undefined,
+    mainArgs: [] as string[], selfTest: true, csv: undefined as string | undefined, dryRun: false,
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--help" || arg === "-h") return { help: true as const };
+    if (arg === "--dry-run") { options.dryRun = true; continue; }
+    if (arg === "--no-self-test") { options.selfTest = false; continue; }
+    if (arg === "--main-arg") {
+      const value = argv[++i];
+      if (value === undefined) throw new Error("--main-arg requires a value");
+      options.mainArgs.push(value);
+      continue;
+    }
+    const value = argv[++i];
+    if (value === undefined) throw new Error(arg + " requires a value");
+    const number = Number(value);
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(number)) throw new Error(arg + " must be an integer");
+    if (arg === "--trials" && number >= 1 && number <= 1000) options.trials = number;
+    else if (arg === "--seed" && number <= 0xffffffff) options.seed = number || 0x9e3779b9;
+    else if (arg === "--acquire-budget" && number >= 1 && number <= 100000) options.budget = number;
+    else if (arg === "--csv") options.csv = value;
+    else if (["--trials", "--seed", "--acquire-budget"].includes(arg)) throw new Error(arg + " is outside range");
+    else throw new Error("unknown option " + arg);
+  }
+  return options;
+}
+
+function discoverSamples(): Sample[] {
+  const samples: Sample[] = [];
+  for (const { group, kind } of groups) {
+    const dir = path.join(root, group);
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.isDirectory() || entry.name === "common") continue;
+      if (existsSync(path.join(dir, entry.name, "CMakeLists.txt"))) {
+        samples.push({ group, kind, name: entry.name, key: group + "/" + entry.name });
+      }
+    }
+  }
+  if (!samples.length) throw new Error("no bench sample directories with CMakeLists.txt were found");
+  return samples;
+}
+
+function run(cmd: string, args: string[], cwd = root, env: Record<string, string | undefined> = process.env, maxBuffer = 64 * 1024 * 1024): Result {
+  const result = spawnSync(cmd, args, { cwd, env, encoding: "utf8", maxBuffer });
+  return { code: result.status ?? 127, stdout: result.stdout ?? "", stderr: result.stderr ?? "", error: result.error ? String(result.error) : "" };
+}
+
+function detail(result: Result): string {
+  const text = result.stderr || result.stdout || result.error;
+  return text.length > 5000 ? text.slice(-5000) : text;
+}
+
+function refreshSudo(env: Record<string, string | undefined>): void {
+  const result = spawnSync(command("sudo"), ["-v"], { cwd: root, env, stdio: "inherit" });
+  if (result.status !== 0) throw new Error("sudo authentication failed" + (result.error ? ": " + String(result.error) : ""));
+}
+
+function requireSuccess(label: string, result: Result): void {
+  if (result.code !== 0) throw new Error(label + " failed (exit " + result.code + ")\n" + detail(result));
+}
+
+function jsonFile(filename: string): Record<string, unknown> {
+  const value: unknown = JSON.parse(readFileSync(filename, "utf8"));
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid JSON object: " + filename);
+  return value as Record<string, unknown>;
+}
+
+function storeOutput(attr: string, env: Record<string, string | undefined>): string {
+  const result = run(nix, ["build", "--no-link", "--print-out-paths", "--no-write-lock-file", attr], root, env);
+  requireSuccess("Nix " + attr, result);
+  const output = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith("/nix/store/")).at(-1);
+  if (!output || !existsSync(output)) throw new Error("Nix did not return a usable output for " + attr);
+  return output;
+}
+
+function profileDir(sample: Sample): string {
+  return path.join(root, "build", sample.group, sample.name, "protect");
+}
+
+function buildDir(sample: Sample, mode: Mode): string {
+  return path.join(root, "build", sample.group, sample.name, mode);
+}
+
+function readelfFor(directory: string): string | undefined {
+  const cache = path.join(directory, "CMakeCache.txt");
+  if (existsSync(cache)) {
+    const line = readFileSync(cache, "utf8").split(/\r?\n/).find((item) => item.startsWith("CMAKE_READELF:"));
+    const value = line?.slice(line.indexOf("=") + 1).trim();
+    if (value && existsSync(value)) return value;
+  }
+  for (const name of ["llvm-readelf", "readelf"]) {
+    try { return command(name); } catch {}
+  }
+  return undefined;
+}
+
+function elfMetrics(image: string, readelf: string | undefined): Pick<Size, "ptLoadFileBytes" | "ptLoadMemoryBytes" | "executablePages"> {
+  if (!readelf) return { ptLoadFileBytes: null, ptLoadMemoryBytes: null, executablePages: null };
+  const result = run(readelf, ["-lW", image]);
+  requireSuccess("readelf " + image, result);
+  let fileBytes = 0n, memoryBytes = 0n;
+  const ranges: Array<[bigint, bigint]> = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields[0] !== "LOAD" || fields.length < 8) continue;
+    const hex = (text: string) => /^0x[0-9a-f]+$/i.test(text) ? BigInt(text) : 0n;
+    const address = hex(fields[2]!);
+    const file = hex(fields[4]!);
+    const memory = hex(fields[5]!);
+    const flags = fields.slice(6, -1).join("");
+    fileBytes += file;
+    memoryBytes += memory;
+    if (flags.includes("E") && memory) {
+      const page = 4096n;
+      ranges.push([address / page, (address + memory + page - 1n) / page]);
+    }
+  }
+  if (!fileBytes) throw new Error("readelf found no PT_LOAD segments: " + image);
+  ranges.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+  let pages = 0n, start = 0n, end = 0n;
+  for (const [nextStart, nextEnd] of ranges) {
+    if (!end) { start = nextStart; end = nextEnd; }
+    else if (nextStart <= end) end = nextEnd > end ? nextEnd : end;
+    else { pages += end - start; start = nextStart; end = nextEnd; }
+  }
+  if (end) pages += end - start;
+  return { ptLoadFileBytes: Number(fileBytes), ptLoadMemoryBytes: Number(memoryBytes), executablePages: Number(pages) };
+}
+
+function artifactMetrics(sample: Sample, mode: Mode): Size {
+  const dir = buildDir(sample, mode);
+  const image = path.join(dir, "enclave.signed.so");
+  if (!existsSync(image) || !existsSync(path.join(dir, "host"))) throw new Error("prebuilt outputs missing for " + sample.key + " " + mode);
+  return { enclaveBytes: statSync(image).size, ...elfMetrics(image, readelfFor(dir)) };
+}
+
+function rng(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return (state >>> 0) / 0x100000000; };
+}
+
+function shuffle<T>(items: T[], random: () => number): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [out[i], out[j]] = [out[j]!, out[i]!]; }
+  return out;
+}
+
+function schedule(samples: Sample[], trials: number, seed: number): Task[] {
+  const random = rng(seed), result: Task[] = [];
+  for (let trial = 1; trial <= trials; trial++) {
+    const orders = new Map(samples.map((sample) => [sample.key, shuffle(modes, random)]));
+    for (let position = 0; position < modes.length; position++) {
+      for (const sample of shuffle(samples, random)) result.push({ sample, trial, mode: orders.get(sample.key)![position]! });
+    }
+  }
+  return result;
+}
+
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+}
+
+export function parseMicro(stdout: string, expectedSample: string): { ticks: number; ns: number; count: number } {
+  let header = false;
+  const ticks: number[] = [], ns: number[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    if (line.trim() === "sample,iteration,enclave_tsc_ticks,host_ecall_ns") { header = true; continue; }
+    if (!header || !line.trim()) continue;
+    const fields = line.trim().split(",");
+    if (fields[0] !== expectedSample) {
+      if (fields.length === 4 && fields.slice(1).every((field) => /^\d+$/.test(field))) throw new Error("micro host emitted rows for an unexpected sample: " + fields[0]);
+      continue; // ignore runner status after the CSV
+    }
+    if (fields.length !== 4 || !fields.slice(1).every((field) => /^\d+$/.test(field))) throw new Error("micro host emitted a malformed timing row");
+    ticks.push(Number(fields[2])); ns.push(Number(fields[3]));
+  }
+  const t = median(ticks), n = median(ns);
+  if (t === null || n === null) throw new Error("micro host emitted no timing rows");
+  return { ticks: t, ns: n, count: ticks.length };
+}
+
+function buildMode(sample: Sample, mode: Mode, env: Record<string, string | undefined>): Size {
+  console.log(sample.key + ": prebuild " + mode);
+  requireSuccess(sample.key + " " + mode + " build", run(bun, ["scripts/sample.ts", "build", sample.group, sample.name, mode], root, env));
+  return artifactMetrics(sample, mode);
+}
+
+function prepareDynamic(sample: Sample, options: Options, env: Record<string, string | undefined>, acquisition: string, bundle: string, runDir: string): Size {
+  const pdir = profileDir(sample), bundleFile = path.join(pdir, "profile-bundle.json"), workset = path.join(pdir, "workset.dynamic.v2.json");
+  console.log(sample.key + ": Profile");
+  requireSuccess(sample.key + " Profile", run(bun, ["scripts/sample.ts", "profile", sample.group, sample.name, "protect"], root, env));
+  if (!existsSync(bundleFile)) throw new Error("Profile bundle missing: " + bundleFile);
+
+  rmSync(workset, { force: true });
+  const prepare = path.join(acquisition, "bin", "atfield-acquire-prepare");
+  const trace = path.join(acquisition, "lib", "libatfield_trace.so");
+  const explore = path.join(acquisition, "lib", "libatfield_explore.so");
+  for (const file of [prepare, trace, explore]) if (!existsSync(file)) throw new Error("acquisition output missing " + file);
+  const shell = sample.group.replace("/", "-") + "-" + sample.name + "-protect";
+  const corpus = path.join(runDir, "corpus", sample.group, sample.name);
+  const args = ["develop", "--no-write-lock-file", root + "#" + shell, "--command", "env",
+    "ATFIELD_IMPLEMENT_ROOT=" + bundle, "ATFIELD_HOST_RUNNER=on", "ATFIELD_READINESS_BACKEND=kernel",
+    "sudo", "-E", "--", prepare, "--bundle", bundleFile, "--collector", trace, "--explore-collector", explore,
+    "--corpus", corpus, "--out", workset];
+  if (options.budget !== undefined) args.push("--budget", String(options.budget));
+  for (const value of options.mainArgs) args.push("--main-arg", value);
+  if (options.selfTest) args.push("--supplemental-arg=--self-test");
+  console.log(sample.key + ": dynamic v2 acquisition");
+  refreshSudo(env);
+  requireSuccess(sample.key + " acquisition", run(nix, args, root, env));
+  if (!existsSync(workset) || jsonFile(workset).schema !== "atfield-workset-v2") throw new Error("acquisition did not produce a v2 workset: " + workset);
+  return buildMode(sample, "protect", env);
+}
+
+function parseHelper(stdout: string): Record<string, unknown> {
+  const line = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
+  if (!line) throw new Error("frequency helper emitted no JSON readback");
+  const value: unknown = JSON.parse(line);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("frequency helper emitted invalid JSON");
+  return value as Record<string, unknown>;
+}
+
+function checkFrequencyApply(value: Record<string, unknown>): void {
+  if (value.action !== "apply" || !Array.isArray(value.isolated_cpus) || !Array.isArray(value.policies) || !value.policies.length) {
+    throw new Error("frequency helper apply output lacks policy readback");
+  }
+  const cpus = new Set(value.isolated_cpus.filter((cpu): cpu is number => Number.isInteger(cpu)));
+  const bases = new Set<string>();
+  for (const item of value.policies) {
+    if (!item || typeof item !== "object") throw new Error("invalid frequency policy readback");
+    const policy = item as Record<string, unknown>;
+    if (typeof policy.base_frequency !== "string" || policy.base_frequency !== policy.scaling_min_freq || policy.base_frequency !== policy.scaling_max_freq || !Array.isArray(policy.cpus) || !policy.cpus.every((cpu) => cpus.has(cpu as number))) {
+      throw new Error("frequency helper readback does not show isolated fixed-base policies");
+    }
+    bases.add(policy.base_frequency);
+  }
+  const turbo = value.no_turbo as Record<string, unknown> | null;
+  if (bases.size !== 1 || !turbo || turbo.value !== "1") throw new Error("frequency helper did not confirm a common non-turbo base");
+}
+
+function metric(run: Run, sample: Sample): number | undefined {
+  return sample.kind === "micro" ? run.hostEcallNs : run.hostWallNs;
+}
+
+function printReport(samples: Sample[], runs: Run[], sizes: Map<string, Partial<Sizes>>, failures: string[], trials: number): void {
+  console.log("\nSample\tMetric\tRaw median (n/trials)\tDynamic median\tFull REG median\tProtect/raw paired\tNaive/raw paired\tProtect/naive paired\tFailures raw/protect/naive");
+  for (const sample of samples) {
+    const selected = (mode: Mode) => runs.filter((run) => run.sample.key === sample.key && run.mode === mode);
+    const values = new Map(modes.map((mode) => [mode, median(selected(mode).filter((run) => run.status === "success").map((run) => metric(run, sample)!).filter(Number.isFinite))]));
+    const cell = (mode: Mode) => {
+      const successCount = selected(mode).filter((run) => run.status === "success" && metric(run, sample) !== undefined).length;
+      const value = values.get(mode);
+      return (value === null ? "FAIL" : Math.round(value).toString()) + " (" + successCount + "/" + trials + ")";
+    };
+    const paired = (numerator: Mode, denominator: Mode) => {
+      const top = selected(numerator), bottom = selected(denominator);
+      if (top.length !== trials || bottom.length !== trials || top.some((run) => run.status !== "success") || bottom.some((run) => run.status !== "success")) return "invalid";
+      const byTrial = new Map(bottom.map((run) => [run.trial, metric(run, sample)]));
+      const ratios = top.map((run) => metric(run, sample)! / byTrial.get(run.trial)!);
+      const value = median(ratios);
+      return value === null || !Number.isFinite(value) ? "invalid" : value.toFixed(4) + " (" + ratios.length + " pairs)";
+    };
+    const counts = modes.map((mode) => selected(mode).filter((run) => run.status === "failed").length).join("/");
+    console.log([sample.key, sample.kind === "micro" ? "host_ecall_ns" : "host_wall_ns", cell("raw"), cell("protect"), cell("protect-naive"), paired("protect", "raw"), paired("protect-naive", "raw"), paired("protect", "protect-naive"), counts].join("\t"));
+  }
+  console.log("\nBinary sizes\tSample\tMode\tSigned enclave bytes\tPT_LOAD file bytes\tPT_LOAD memory bytes\tExecutable pages");
+  for (const sample of samples) for (const mode of modes) {
+    const size = sizes.get(sample.key)?.[mode];
+    if (size) console.log(["", sample.key, mode, size.enclaveBytes, size.ptLoadFileBytes ?? "unavailable", size.ptLoadMemoryBytes ?? "unavailable", size.executablePages ?? "unavailable"].join("\t"));
+  }
+  if (samples.some((sample) => sample.kind === "micro")) {
+    console.log("\nMicro enclave TSC ticks\tSample\tMode\tMedian ticks per run");
+    for (const sample of samples.filter((item) => item.kind === "micro")) for (const mode of modes) {
+      const value = median(runs.filter((run) => run.sample.key === sample.key && run.mode === mode && run.status === "success" && run.enclaveTicks !== undefined).map((run) => run.enclaveTicks!));
+      console.log(["", sample.key, mode, value ?? "FAIL"].join("\t"));
+    }
+  }
+  if (failures.length) {
+    console.error("\nFailures (" + failures.length + "):");
+    for (const failure of failures) console.error("- " + failure);
+  }
+  console.log("AEX counters are not emitted by run-built; all failed runs remain in this report and optional CSV.");
+}
+
+function csv(value: unknown): string {
+  const text = value === undefined || value === null ? "" : String(value);
+  return /[",\r\n]/.test(text) ? "\"" + text.replace(/"/g, "\"\"") + "\"" : text;
+}
+
+function writeCsv(filename: string, runs: Run[], sizes: Map<string, Partial<Sizes>>): void {
+  const lines = ["sample,trial,mode,status,host_wall_ns,host_ecall_ns,enclave_tsc_ticks,iterations,failure,enclave_bytes,pt_load_file_bytes,pt_load_memory_bytes,executable_pages"];
+  for (const run of runs) {
+    const size = sizes.get(run.sample.key)?.[run.mode];
+    lines.push([run.sample.key, run.trial, run.mode, run.status, run.hostWallNs, run.hostEcallNs, run.enclaveTicks, run.iterations,
+      run.error, size?.enclaveBytes, size?.ptLoadFileBytes, size?.ptLoadMemoryBytes, size?.executablePages].map(csv).join(","));
+  }
+  const target = path.resolve(root, filename);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, lines.join("\n") + "\n", "utf8");
+}
+
+async function main(): Promise<number> {
+  let options: Options | { help: true };
+  try { options = parseArgs(process.argv.slice(2)); }
+  catch (error) { console.error(error instanceof Error ? error.message : String(error)); console.error(usage()); return 2; }
+  if ("help" in options) { console.log(usage()); return 0; }
+  let samples: Sample[];
+  try { samples = discoverSamples(); }
+  catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 2; }
+  const tasks = schedule(samples, options.trials, options.seed);
+  if (options.dryRun) {
+    console.log(JSON.stringify({ samples: samples.map((sample) => sample.key), modes, trials: options.trials, seed: options.seed,
+      default_main_args: options.mainArgs, supplemental_self_test: options.selfTest,
+      first_scheduled_runs: tasks.slice(0, 12).map((task) => [task.trial, task.sample.key, task.mode]) }, null, 2));
+    return 0;
+  }
+
+  const runId = new Date().toISOString().replace(/[:.]/g, "-") + "-" + process.pid + "-" + options.seed;
+  const runDir = path.join(root, "build", "bench", "measure", runId);
+  mkdirSync(runDir, { recursive: true });
+  console.log("Benchmark " + runId + ": " + samples.length + " samples, " + options.trials + " paired trials, seed " + options.seed);
+  console.log("Main arguments " + JSON.stringify(options.mainArgs) + "; supplemental --self-test " + (options.selfTest ? "enabled" : "disabled") + "; acquisition budget " + (options.budget ?? "helper default"));
+  console.log("Run artifacts: " + runDir);
+  const env: Record<string, string | undefined> = { ...process.env, ATFIELD_BENCH_LEASE_ALL: "1", ATFIELD_HOST_RUNNER: "on", ATFIELD_READINESS_BACKEND: "kernel" };
+  delete env.ATFIELD_FROZEN_WORKSET;
+  const sizes = new Map<string, Partial<Sizes>>(), modeFailures = new Map<string, Partial<Record<Mode, string>>>(), failures: string[] = [], runs: Run[] = [];
+  let bundle = "", acquisition = "", frequency = "", state = path.join(runDir, "frequency-state.json"), applied = false, restored = false;
+  let bundleFailure = "", acquisitionFailure = "";
+  try {
+    console.log("Resolving pinned implement bundle");
+    bundle = storeOutput(".#atfield-bundle", env);
+    env.ATFIELD_IMPLEMENT_ROOT = bundle;
+  } catch (error) {
+    bundleFailure = error instanceof Error ? error.message : String(error);
+    failures.push("implement bundle setup: " + bundleFailure);
+    console.error(bundleFailure);
+  }
+  if (bundle) {
+    try {
+      console.log("Resolving acquisition tools");
+      acquisition = storeOutput(".#atfield-acquisition", env);
+    } catch (error) {
+      acquisitionFailure = error instanceof Error ? error.message : String(error);
+      failures.push("acquisition package setup: " + acquisitionFailure);
+      console.error(acquisitionFailure);
+    }
+  }
+  const recordFailure = (sample: Sample, mode: Mode, error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const byMode = modeFailures.get(sample.key) ?? {};
+    byMode[mode] = message;
+    modeFailures.set(sample.key, byMode);
+    failures.push(sample.key + " " + mode + " preparation: " + message);
+    console.error(sample.key + " " + mode + " preparation failed: " + message);
+  };
+  for (const sample of samples) {
+    const sampleSizes: Partial<Sizes> = {};
+    console.log("Preparing baselines " + sample.key);
+    for (const mode of ["raw", "protect-naive"] as const) {
+      try {
+        if (bundleFailure) throw new Error("implement bundle unavailable: " + bundleFailure);
+        sampleSizes[mode] = buildMode(sample, mode, env);
+      } catch (error) { recordFailure(sample, mode, error); }
+    }
+    sizes.set(sample.key, sampleSizes);
+  }
+  for (const sample of samples) {
+    const sampleSizes = sizes.get(sample.key)!;
+    try {
+      if (bundleFailure) throw new Error("implement bundle unavailable: " + bundleFailure);
+      if (acquisitionFailure) throw new Error("acquisition package unavailable: " + acquisitionFailure);
+      sampleSizes.protect = prepareDynamic(sample, options, env, acquisition, bundle, runDir);
+    } catch (error) { recordFailure(sample, "protect", error); }
+  }
+
+  const ready = samples.some((sample) => modes.some((mode) => sizes.get(sample.key)?.[mode] !== undefined));
+  if (ready) {
+    try {
+      frequency = path.join(bundle || (bundle = storeOutput(".#atfield-bundle", env)), "bin", "atfield-bench-frequency");
+      if (!existsSync(frequency)) throw new Error("frequency helper missing: " + frequency);
+      rmSync(state, { force: true });
+      const sudo = command("sudo");
+      console.log("Applying fixed non-turbo frequency policy");
+      refreshSudo(env);
+      const result = run(sudo, ["-E", "--", frequency, "apply", "--state", state]);
+      if (result.code !== 0) throw new Error("frequency apply failed (exit " + result.code + "): " + detail(result));
+      const readback = parseHelper(result.stdout);
+      checkFrequencyApply(readback);
+      applied = true;
+      console.log("Frequency apply/readback: " + JSON.stringify(readback));
+
+      for (const task of tasks) {
+        const prepError = modeFailures.get(task.sample.key)?.[task.mode];
+        if (prepError) {
+          runs.push({ ...task, status: "failed", error: "preparation failed: " + prepError });
+          continue;
+        }
+        const resultRow: Run = { ...task, status: "failed" };
+        const runFile = path.join(buildDir(task.sample, task.mode), "run.json");
+        rmSync(runFile, { force: true });
+        console.log("trial " + task.trial + "/" + options.trials + " " + task.sample.key + " " + task.mode);
+        let executed: Result | undefined;
+        try {
+          refreshSudo(env);
+          executed = run(bun, ["scripts/sample.ts", "run-built", task.sample.group, task.sample.name, task.mode, ...options.mainArgs], root, env);
+          if (!executed) throw new Error("run-built was not launched");
+          if (executed.code !== 0) throw new Error("run-built exit " + executed.code + ": " + detail(executed));
+          const metadata = jsonFile(runFile);
+          if (metadata.exitCode !== 0) throw new Error("run.json reports nonzero exitCode");
+          const wall = Number(metadata.host_wall_ns);
+          if (!Number.isFinite(wall) || wall <= 0) throw new Error("run.json host_wall_ns is invalid");
+          resultRow.hostWallNs = wall;
+          if (task.sample.kind === "micro") {
+            const measured = parseMicro(executed.stdout, task.sample.name);
+            resultRow.hostEcallNs = measured.ns; resultRow.enclaveTicks = measured.ticks; resultRow.iterations = measured.count;
+          }
+          resultRow.status = "success";
+        } catch (error) {
+          resultRow.error = error instanceof Error ? error.message : String(error);
+          failures.push(task.sample.key + " trial " + task.trial + " " + task.mode + ": " + resultRow.error);
+          console.error(resultRow.error);
+          if (executed?.stdout) console.error(executed.stdout.slice(-5000));
+          if (executed?.stderr) console.error(executed.stderr.slice(-5000));
+        }
+        runs.push(resultRow);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(message);
+      console.error(message);
+      while (runs.length < tasks.length) {
+        const task = tasks[runs.length]!;
+        runs.push({ ...task, status: "failed", error: "measurement setup failed: " + message });
+      }
+    } finally {
+      if (existsSync(state) && frequency) {
+        try {
+          refreshSudo(env);
+          const result = run(command("sudo"), ["-E", "--", frequency, "restore", "--state", state]);
+          if (result.code !== 0) throw new Error("frequency restore failed (exit " + result.code + "): " + detail(result));
+          const readback = parseHelper(result.stdout);
+          if (readback.action !== "restore") throw new Error("frequency helper did not confirm restore");
+          restored = true;
+          console.log("Frequency restore/readback: " + JSON.stringify(readback));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const recovery = existsSync(state) ? "recovery state retained at " + state : "recovery state file absent; verify the restored policy readback";
+          failures.push(message + "; " + recovery);
+          console.error(message + "; " + recovery);
+        }
+      } else if (applied) {
+        failures.push("frequency apply returned success without its recovery state; cannot confirm restore");
+      }
+    }
+  } else {
+    for (const task of tasks) runs.push({ ...task, status: "failed", error: "preparation failed: " + (modeFailures.get(task.sample.key)?.[task.mode] ?? "not attempted") });
+  }
+
+  printReport(samples, runs, sizes, failures, options.trials);
+  if (options.csv) writeCsv(options.csv, runs, sizes);
+  if (applied && !restored) return 1;
+  return failures.length ? 1 : 0;
+}
+
+if (import.meta.main) process.exitCode = await main();
