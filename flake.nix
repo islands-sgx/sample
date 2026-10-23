@@ -4,7 +4,7 @@
   inputs.llvm-project.flake = false;
 
   inputs.sgx-source = {
-    url = "git+ssh://git@github.com/islands-sgx/intel-confidentialComputing_sgx?rev=5eebcd657472e957291a94da9a68cfc0b55e7e82&submodules=1";
+    url = "git+ssh://git@github.com/islands-sgx/intel-confidentialComputing_sgx?ref=atfield-sdk-2.29-repro-sign&rev=05087f776b28bebb018ae4b290de82439947606b&submodules=1";
     flake = false;
   };
 
