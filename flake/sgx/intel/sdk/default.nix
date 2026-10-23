@@ -1,7 +1,7 @@
 {
   lib,
   stdenv,
-  fetchFromGitHub,
+  sgxSource,
   autoconf,
   automake,
   binutils,
@@ -30,13 +30,7 @@ stdenv.mkDerivation (rec {
   pname = "sgx-sdk";
   # Version as given in se_version.h.
   version = "2.29.100.1";
-  src = fetchFromGitHub {
-    owner = "islands-sgx";
-    repo = "intel-confidentialComputing_sgx";
-    rev = "5eebcd657472e957291a94da9a68cfc0b55e7e82";
-    hash = "sha256-mSojJ8fvzJkNcWtaOPEm/WX155Khv4oW8HP2Pp6rD3g=";
-    fetchSubmodules = true;
-  };
+  src = sgxSource;
 
 
   postPatch = ''

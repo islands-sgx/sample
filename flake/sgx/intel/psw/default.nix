@@ -2,7 +2,7 @@
   stdenv,
   lib,
   fetchurl,
-  fetchFromGitHub,
+  sgxSource,
   cmake,
   coreutils,
   curl,
@@ -23,13 +23,7 @@ stdenv.mkDerivation (rec {
   version = "2.29.100.1";
   # Version as used in the Git tag
   versionTag = "2.29";
-  src = fetchFromGitHub {
-    owner = "islands-sgx";
-    repo = "intel-confidentialComputing_sgx";
-    rev = "87af9c504bbc73d35c2292c8b999cd1e00493015";
-    hash = "sha256-zQtvH2iAW/8qQDynnTv0MT0Hc5Hzk59WlmWE5j7QHCc=";
-    fetchSubmodules = true;
-  };
+  src = sgxSource;
 
 
   # Extract Intel-provided, pre-built enclaves and libs.

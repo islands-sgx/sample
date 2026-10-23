@@ -1,6 +1,6 @@
-{ pkgs, llvmPackages, toolchain }:
+{ pkgs, llvmPackages, toolchain, sgxSource }:
 let
-  sdkBase = pkgs.callPackage ./sgx/intel/sdk { };
+  sdkBase = pkgs.callPackage ./sgx/intel/sdk { inherit sgxSource; };
   sgxEdger8rAbi = pkgs.stdenv.mkDerivation {
     pname = "sgx-edger8r-abi";
     version = "2.29.100.1";
@@ -41,7 +41,7 @@ let
     ln -s "${sgxEdger8rAbi}/bin/sgx_edger8r" "$out/bin/sgx_edger8r"
     ln -sr "$out/bin/sgx_edger8r" "$out/bin/x64/sgx_edger8r"
   '';
-  psw = pkgs.callPackage ./sgx/intel/psw { };
+  psw = pkgs.callPackage ./sgx/intel/psw { inherit sgxSource; };
   mkTrusted = mode: pkgs.callPackage ./sgx/intel/sdk/trusted-libs.nix {
     inherit (toolchain) stdenv;
     inherit llvmPackages;

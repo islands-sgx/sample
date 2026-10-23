@@ -3,6 +3,11 @@
   inputs.llvm-project.url = "github:islands-sgx/llvm-llvmProject/generic-anchor";
   inputs.llvm-project.flake = false;
 
+  inputs.sgx-source = {
+    url = "git+ssh://git@github.com/islands-sgx/intel-confidentialComputing_sgx?rev=5eebcd657472e957291a94da9a68cfc0b55e7e82&submodules=1";
+    flake = false;
+  };
+
   inputs.implement = {
     url = "git+ssh://git@github.com/islands-sgx/implement";
     flake = false;
@@ -22,6 +27,7 @@
       };
       sgx = import ./flake/sgx.nix {
         inherit pkgs llvmPackages toolchain;
+        sgxSource = inputs."sgx-source";
       };
       libraries = import ./flake/libraries.nix {
         inherit pkgs toolchain sgx;
