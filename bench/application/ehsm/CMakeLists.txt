@@ -17,7 +17,7 @@ sgx_add_sample(
     "${_EHSM_SOURCE_DIRECTORY}/openssl_operation.cpp"
   HOST_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/host.cpp"
-    "${CMAKE_SOURCE_DIR}/common/sgxssl_cpu.c"
+    "${CMAKE_SOURCE_DIR}/bench/application/ehsm/sgxssl_cpu.c"
   INCLUDE_DIRECTORIES
     "${_EHSM_SOURCE_DIRECTORY}"
     "${_EHSM_INCLUDE_DIRECTORY}"
@@ -30,7 +30,6 @@ sgx_add_sample(
     "${SGXSSL_ROOT}/include/nofilefunc"
   HOST_INCLUDE_DIRECTORIES
     "${_EHSM_INCLUDE_DIRECTORY}"
-    "${CMAKE_SOURCE_DIR}/common"
     "${SGXSSL_ROOT}/include"
   HOST_LIBRARIES "${SGXSSL_ROOT}/lib/libsgx_usgxssl.a"
   ENCLAVE_COMPILE_OPTIONS

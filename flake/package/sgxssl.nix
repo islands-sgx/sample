@@ -41,7 +41,7 @@ let
     hash = "sha256-YX4pr45CH0ZklISkk35IxoXkf0ZIgWfJgviLxOwdUi8=";
   };
   cpuProfileInclude = writeTextDir "include/sgxssl_cpu_profile.h"
-    (builtins.readFile ../../common/sgxssl_cpu_profile.h);
+    (builtins.readFile ./sgxssl_cpu_profile.h);
   fixedCpuArgs = [
     "-DSGXSSL_FIXED_CPU_PROFILE"
     "-I${cpuProfileInclude}/include"
