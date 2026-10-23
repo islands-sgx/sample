@@ -3,7 +3,7 @@ import {
   accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync,
   rmSync, statSync, writeFileSync,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -317,7 +317,226 @@ function prepareDynamic(sample: Sample, options: Options, env: Record<string, st
   const invocation = buildPrepareSudoCommand(prepare, args, shellEnvironment, callerUid, callerGid);
   requireSuccess(sample.key + " acquisition", run(invocation.command, invocation.args, root, env));
   if (!existsSync(workset) || jsonFile(workset).schema !== "atfield-workset-v2") throw new Error("acquisition did not produce a v2 workset: " + workset);
-  return buildMode(sample, "protect", env);
+  const protectSize = buildMode(sample, "protect", env);
+  prepareAndVerifyFinalV2(sample, options, env, acquisition, runDir, shellEnvironment, bundleFile, workset);
+  return protectSize;
+}
+
+type ValidationIdentity = {
+  manifestSha256: string;
+  worksetSha256: string;
+  capacityQ: number;
+  signedFinalElfSha256: string;
+  readyTableSha256: string;
+  signedMeasurementFinalElfSha256: string;
+  manifestFieldCount: number;
+  productionConfigSha256: string;
+  measurementConfigSha256: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function digestFile(filename: string): string {
+  const hash = createHash("sha256");
+  hash.update(readFileSync(filename));
+  return hash.digest("hex");
+}
+
+function sortedStrings(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.length > 0)) {
+    throw new Error(label + " must be an array of nonempty strings");
+  }
+  return [...new Set(value as string[])].sort();
+}
+
+export function validateFinalV2Batch(
+  expectedFieldsInput: string[],
+  summaries: Record<string, unknown>[],
+  identity: ValidationIdentity,
+): void {
+  const expectedFields = sortedStrings(expectedFieldsInput, "target Fields");
+  if (!expectedFields.length || expectedFields.length !== expectedFieldsInput.length) {
+    throw new Error("frozen Final v2 target must contain a nonempty unique Field set");
+  }
+  if (!summaries.length) throw new Error("Final v2 validation batch is empty");
+  const measured = new Set<string>();
+  for (let index = 0; index < summaries.length; index++) {
+    const summary = summaries[index]!;
+    const label = "Final v2 validation execution " + (index + 1);
+    if (summary.target_kind !== "final-v2" || summary.completion !== "complete" ||
+        summary.measurement_complete !== true || summary.exit_code !== 0 || summary.timed_out !== false ||
+        typeof summary.valid_ecall_count !== "number" || summary.valid_ecall_count < 1 ||
+        summary.invalid_ecall_count !== 0) {
+      throw new Error(label + " did not complete successfully on the frozen Final");
+    }
+    if (summary.selected_enclave_sha256 !== identity.signedMeasurementFinalElfSha256) {
+      throw new Error(label + " selected a different signed measurement Final");
+    }
+    const validation = summary.final_v2_validation;
+    if (!isRecord(validation) || validation.verdict !== "PASS" ||
+        validation.observed_page_count !== 0 || validation.final_v2_verification_failure_count !== 0) {
+      throw new Error(label + " failed its raw S3/AEX/measurement/readiness/SGX verification");
+    }
+    const observedIdentity = validation.final_v2_target;
+    if (!isRecord(observedIdentity) ||
+        observedIdentity.manifestSha256 !== identity.manifestSha256 ||
+        observedIdentity.worksetSha256 !== identity.worksetSha256 ||
+        observedIdentity.capacityQ !== identity.capacityQ ||
+        observedIdentity.signedFinalElfSha256 !== identity.signedFinalElfSha256 ||
+        observedIdentity.readyTableSha256 !== identity.readyTableSha256 ||
+        observedIdentity.signedMeasurementFinalElfSha256 !== identity.signedMeasurementFinalElfSha256 ||
+        observedIdentity.manifestFieldCount !== identity.manifestFieldCount ||
+        observedIdentity.productionConfigSha256 !== identity.productionConfigSha256 ||
+        observedIdentity.measurementConfigSha256 !== identity.measurementConfigSha256) {
+      throw new Error(label + " used a different frozen Final/ReadyTable identity");
+    }
+    const fieldIds = sortedStrings(validation.measured_field_ids, label + " measured_field_ids");
+    for (const fieldId of fieldIds) {
+      if (!expectedFields.includes(fieldId)) throw new Error(label + " measured an unexpected Field " + fieldId);
+      measured.add(fieldId);
+    }
+  }
+  const missing = expectedFields.filter((fieldId) => !measured.has(fieldId));
+  if (missing.length) throw new Error("Final v2 validation batch did not enter every target Field: " + missing.join(", "));
+}
+
+function validationCommands(sample: Sample, options: Options): Array<{ label: string; args: string[] }> {
+  return [
+    { label: "main", args: [...options.mainArgs] },
+    ...(options.supplemental ? supplementalCommands(sample).map((args, index) => ({ label: "supplemental-" + (index + 1), args })) : []),
+  ];
+}
+
+function prepareAndVerifyFinalV2(
+  sample: Sample,
+  options: Options,
+  env: Record<string, string | undefined>,
+  acquisition: string,
+  runDir: string,
+  shellEnvironment: Record<string, string>,
+  bundleFile: string,
+  worksetFile: string,
+): void {
+  const directory = buildDir(sample, "protect");
+  const signer = path.join(shellEnvironment.SGX_SDK_ROOT ?? "", "bin", "x64", "sgx_sign");
+  const key = path.join(root, "build", "test-signing-key.pem");
+  for (const file of [signer, key, path.join(directory, "fields.json"), path.join(directory, "enclave.so"),
+    path.join(directory, "enclave.signed.so"), path.join(directory, "pretouch-verified.json"),
+    path.join(directory, "ready.json"), path.join(directory, "ready.bin")]) {
+    if (!existsSync(file)) throw new Error("Final v2 build input is missing: " + file);
+  }
+  const workset = jsonFile(worksetFile);
+  if (!Array.isArray(workset.fields) || workset.fields.length === 0 ||
+      !workset.fields.every((field) => isRecord(field) && typeof field.id === "string")) {
+    throw new Error("dynamic workset does not declare target Field IDs");
+  }
+  const expectedFields = sortedStrings(workset.fields.map((field) => (field as Record<string, unknown>).id), "workset Fields");
+  if (expectedFields.length !== workset.fields.length) throw new Error("dynamic workset contains duplicate Field IDs");
+  const fieldManifest = jsonFile(path.join(directory, "fields.json"));
+  if (!Array.isArray(fieldManifest.fields) ||
+      !fieldManifest.fields.every((field) => isRecord(field) && typeof field.id === "string")) {
+    throw new Error("Final build does not declare its live Field IDs");
+  }
+  const manifestFields = sortedStrings(fieldManifest.fields.map((field) => (field as Record<string, unknown>).id), "Final Fields");
+  if (manifestFields.length !== fieldManifest.fields.length ||
+      manifestFields.length !== expectedFields.length ||
+      manifestFields.some((fieldId, index) => fieldId !== expectedFields[index])) {
+    throw new Error("frozen workset Field set differs from the Profile bundle Field set");
+  }
+
+  const measurementBuilder = path.join(acquisition, "bin", "atfield-acquire-prepare-final-v2-measurement");
+  const freeze = path.join(acquisition, "bin", "atfield-acquire-freeze-final-v2");
+  const runner = path.join(acquisition, "bin", "atfield-acquire-run");
+  const collector = path.join(acquisition, "lib", "libatfield_trace.so");
+  for (const file of [measurementBuilder, freeze, runner, collector]) {
+    if (!existsSync(file)) throw new Error("Final v2 verification tool is missing: " + file);
+  }
+
+  console.log(sample.key + ": prepare frozen Final v2 measurement image");
+  requireSuccess(sample.key + " Final v2 measurement preparation", run(measurementBuilder, [
+    "--final-elf", path.join(directory, "enclave.so"),
+    "--fields", path.join(directory, "fields.json"),
+    "--capacity-q", String(workset.capacity_q),
+    "--production-config-xml", path.join(root, sample.group, sample.name, "Enclave.config.xml"),
+    "--sgx-sign", signer,
+    "--key", key,
+    "--out-dir", directory,
+  ], root, env));
+
+  const target = path.join(directory, "final-v2-run-target.json");
+  rmSync(target, { force: true });
+  console.log(sample.key + ": freeze Final/ReadyTable measurement identity");
+  const freezeArgs = [
+    "--bundle", bundleFile,
+    "--workset", worksetFile,
+    "--fields", path.join(directory, "fields.json"),
+    "--final-elf", path.join(directory, "enclave.so"),
+    "--signed-final-elf", path.join(directory, "enclave.signed.so"),
+    "--pretouch-verified", path.join(directory, "pretouch-verified.json"),
+    "--ready-table-json", path.join(directory, "ready.json"),
+    "--ready-table", path.join(directory, "ready.bin"),
+    "--measurement-patch-json", path.join(directory, "enclave.final.4gate.json"),
+    "--measurement-final-elf", path.join(directory, "enclave.final.4gate.so"),
+    "--signed-measurement-final-elf", path.join(directory, "enclave.final.4gate.signed.so"),
+    "--production-config-xml", path.join(root, sample.group, sample.name, "Enclave.config.xml"),
+    "--measurement-config-xml", path.join(directory, "Enclave.measurement.config.xml"),
+    "--out", target,
+  ];
+  requireSuccess(sample.key + " Final v2 target freeze", run(freeze, freezeArgs, root, env));
+  const manifest = jsonFile(target);
+  const targetIdentity = manifest.identity;
+  if (!isRecord(targetIdentity) || manifest.schema !== "atfield-final-v2-run-target-v2") {
+    throw new Error("Final v2 freezer returned an invalid frozen target");
+  }
+  const expectedIdentity: ValidationIdentity = {
+    manifestSha256: digestFile(target),
+    worksetSha256: String(targetIdentity.workset_sha256),
+    capacityQ: Number(targetIdentity.capacity_q),
+    signedFinalElfSha256: String(targetIdentity.signed_final_elf_sha256),
+    readyTableSha256: String(targetIdentity.ready_table_sha256),
+    signedMeasurementFinalElfSha256: String(targetIdentity.signed_measurement_final_elf_sha256),
+    manifestFieldCount: expectedFields.length,
+    productionConfigSha256: String(targetIdentity.production_config_sha256),
+    measurementConfigSha256: String(targetIdentity.measurement_config_sha256),
+  };
+  if (expectedIdentity.worksetSha256 !== digestFile(worksetFile) ||
+      expectedIdentity.manifestFieldCount !== expectedFields.length ||
+      expectedIdentity.capacityQ !== workset.capacity_q) {
+    throw new Error("frozen Final v2 target does not bind the acquired workset and all its Fields");
+  }
+
+  const commands = validationCommands(sample, options);
+  const summaries: Record<string, unknown>[] = [];
+  for (const [index, validationCommand] of commands.entries()) {
+    const artifactDir = path.join(runDir, "final-v2-verification", sample.group, sample.name, String(index + 1).padStart(2, "0"));
+    mkdirSync(artifactDir, { recursive: true });
+    console.log(sample.key + ": independent Final v2 replay " + validationCommand.label);
+    const args = [
+      "--bundle", bundleFile,
+      "--final-v2-target", target,
+      "--collector", collector,
+      "--mode", "verify-pretouch",
+      "--gate-mode", "c-preserve-tlb",
+      "--timeout-ms", "600000",
+      "--sample", sample.key + "/" + validationCommand.label,
+      "--artifact-dir", artifactDir,
+      "--",
+      ...validationCommand.args,
+    ];
+    const callerUid = process.getuid?.(), callerGid = process.getgid?.();
+    if (callerUid === undefined || callerGid === undefined) throw new Error("POSIX caller uid/gid are unavailable");
+    const invocation = buildPrepareSudoCommand(runner, args, shellEnvironment, callerUid, callerGid);
+    const result = run(invocation.command, invocation.args, root, env);
+    requireSuccess(sample.key + " Final v2 replay " + validationCommand.label, result);
+    const summary = JSON.parse(result.stdout) as unknown;
+    if (!isRecord(summary)) throw new Error(sample.key + " Final v2 replay did not emit a JSON summary");
+    summaries.push(summary);
+  }
+  validateFinalV2Batch(expectedFields, summaries, expectedIdentity);
+  console.log(sample.key + ": Final v2 independent replay PASS (" +
+    summaries.length + " commands, " + expectedFields.length + " target Fields)");
 }
 
 function parseHelper(stdout: string): Record<string, unknown> {
@@ -395,7 +614,8 @@ function printReport(samples: Sample[], runs: Run[], sizes: Map<string, Partial<
     console.error("\nFailures (" + failures.length + "):");
     for (const failure of failures) console.error("- " + failure);
   }
-  console.log("AEX counters are not emitted by run-built; all failed runs remain in this report and optional CSV.");
+  console.log("Final v2 validation independently replays each declared main/supplemental command before timing; this is not held-out input coverage.");
+  console.log("Timed run-built trials do not load the verification collector; failed runs remain in this report and optional CSV.");
 }
 
 function csv(value: unknown): string {
@@ -450,6 +670,7 @@ async function main(): Promise<number> {
   const env: Record<string, string | undefined> = { ...process.env, ATFIELD_BENCH_LEASE_ALL: "1", ATFIELD_HOST_RUNNER: "on", ATFIELD_READINESS_BACKEND: "kernel" };
   delete env.ATFIELD_FROZEN_WORKSET;
   const sizes = new Map<string, Partial<Sizes>>(), modeFailures = new Map<string, Partial<Record<Mode, string>>>(), failures: string[] = [], runs: Run[] = [];
+  const finalV2GateFailures = new Map<string, string>();
   let bundle = "", acquisition = "", frequency = "", state = path.join(runDir, "frequency-state.json"), applied = false, restored = false;
   let bundleFailure = "", acquisitionFailure = "";
   try {
@@ -496,7 +717,10 @@ async function main(): Promise<number> {
       if (bundleFailure) throw new Error("implement bundle unavailable: " + bundleFailure);
       if (acquisitionFailure) throw new Error("acquisition package unavailable: " + acquisitionFailure);
       sampleSizes.protect = prepareDynamic(sample, options, env, acquisition, runDir);
-    } catch (error) { recordFailure(sample, "protect", error); }
+    } catch (error) {
+      recordFailure(sample, "protect", error);
+      finalV2GateFailures.set(sample.key, error instanceof Error ? error.message : String(error));
+    }
   }
 
   const ready = samples.some((sample) => modes.some((mode) => sizes.get(sample.key)?.[mode] !== undefined));
@@ -515,6 +739,11 @@ async function main(): Promise<number> {
       console.log("Frequency apply/readback: " + JSON.stringify(readback));
 
       for (const task of tasks) {
+        const gateFailure = finalV2GateFailures.get(task.sample.key);
+        if (task.mode === "protect" && gateFailure) {
+          runs.push({ ...task, status: "failed", error: "Final v2 verification failed; protect timing is blocked: " + gateFailure });
+          continue;
+        }
         const prepError = modeFailures.get(task.sample.key)?.[task.mode];
         if (prepError) {
           runs.push({ ...task, status: "failed", error: "preparation failed: " + prepError });
