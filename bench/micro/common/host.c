@@ -25,12 +25,8 @@
 #error "SAMPLE_NAME must name the benchmark sample"
 #endif
 
-#ifndef DEFAULT_WARMUP_ROUNDS
 #define DEFAULT_WARMUP_ROUNDS 5
-#endif
-#ifndef DEFAULT_MEASURED_ROUNDS
 #define DEFAULT_MEASURED_ROUNDS 50
-#endif
 #define PROFILE_WARMUP_ROUNDS 1
 #define PROFILE_MEASURED_ROUNDS 2
 #define MAX_WARMUP_ROUNDS 10000
