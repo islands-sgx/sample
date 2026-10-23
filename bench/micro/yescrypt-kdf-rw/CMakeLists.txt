@@ -9,8 +9,6 @@ find_path(
 
 bench_add_sample(
   NAME yescrypt-kdf-rw
-  WARMUP_ROUNDS 50
-  MEASURED_ROUNDS 500
   HOST_SOURCES answer.c
   INCLUDE_DIRECTORIES "${YESCRYPT_SGX_ROOT}/include"
   TRUSTED_LIBRARIES "${YESCRYPT_SGX_ROOT}/lib/libyescrypt-sgx.a")
