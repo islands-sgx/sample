@@ -542,9 +542,24 @@ function prepareAndVerifyFinalV2(
     const invocation = buildPrepareSudoCommand(runner, args, shellEnvironment, callerUid, callerGid);
     const result = run(invocation.command, invocation.args, root, env);
     returnGeneratedFilesToCaller(artifactDir, callerUid, callerGid, env);
-    requireSuccess(sample.key + " Final v2 replay " + validationCommand.label, result);
-    const summary = JSON.parse(result.stdout) as unknown;
+    let summary: unknown;
+    try { summary = JSON.parse(result.stdout) as unknown; }
+    catch {
+      requireSuccess(sample.key + " Final v2 replay " + validationCommand.label, result);
+      throw new Error(sample.key + " Final v2 replay did not emit a JSON summary");
+    }
     if (!isRecord(summary)) throw new Error(sample.key + " Final v2 replay did not emit a JSON summary");
+    if (result.code !== 0) {
+      const s3 = Array.isArray(summary.s3_body_page_observations) ? summary.s3_body_page_observations : [];
+      const final = isRecord(summary.final_v2_validation) ? summary.final_v2_validation : {};
+      throw new Error(sample.key + " Final v2 replay " + validationCommand.label +
+        " rejected (verifier exit " + result.code + "): " + JSON.stringify({
+          host_exit_code: summary.exit_code, completion: summary.completion,
+          measurement_complete: summary.measurement_complete, invalid_ecalls: summary.invalid_ecall_count,
+          verdict: final.verdict, s3_page_count: s3.length, s3_pages: s3.slice(0, 8),
+          incomplete_reasons: summary.incomplete_reasons, artifacts: artifactDir,
+        }));
+    }
     summaries.push(summary);
   }
   validateFinalV2Batch(expectedFields, summaries, expectedIdentity);
