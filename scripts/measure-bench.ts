@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import {
-  accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync,
+  accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readdirSync,
   rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
@@ -8,6 +8,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { sampleAcquireDir, sampleBuildDir, sampleCorpusPath, sampleWorksetPath } from "./sample-paths.ts";
+import { assertDeclaredArchitectureS3 } from "./architectural-s3.ts";
 
 type Mode = "raw" | "protect" | "protect-naive";
 type Sample = { group: "bench/micro" | "bench/application"; kind: "micro" | "application"; name: string; key: string };
@@ -105,6 +106,16 @@ function supplementalCommands(sample: Sample): string[][] {
 function run(cmd: string, args: string[], cwd = root, env: Record<string, string | undefined> = process.env, maxBuffer = 64 * 1024 * 1024): Result {
   const result = spawnSync(cmd, args, { cwd, env, encoding: "utf8", maxBuffer });
   return { code: result.status ?? 127, stdout: result.stdout ?? "", stderr: result.stderr ?? "", error: result.error ? String(result.error) : "" };
+}
+
+function runWithFileStdout(cmd: string, args: string[], stdoutFile: string, cwd = root, env: Record<string, string | undefined> = process.env): Result {
+  const output = openSync(stdoutFile, "w");
+  try {
+    const result = spawnSync(cmd, args, { cwd, env, encoding: "utf8", stdio: ["ignore", output, "pipe"], maxBuffer: 64 * 1024 * 1024 });
+    return { code: result.status ?? 127, stdout: readFileSync(stdoutFile, "utf8"), stderr: result.stderr ?? "", error: result.error ? String(result.error) : "" };
+  } finally {
+    closeSync(output);
+  }
 }
 
 function detail(result: Result): string {
@@ -295,7 +306,7 @@ function captureSampleRuntimeEnv(shell: string, env: Record<string, string | und
   return parseShellEnvironment(result.stdout);
 }
 
-function prepareDynamic(sample: Sample, options: Options, env: Record<string, string | undefined>, acquisition: string, runDir: string): Size {
+function prepareDynamic(sample: Sample, options: Options, env: Record<string, string | undefined>, acquisition: string, runDir: string): { size: Size; architectureDeclared: boolean } {
   const pdir = profileDir(sample), bundleFile = path.join(pdir, "profile-bundle.json");
   const workset = sampleWorksetPath(root, sample.group, sample.name, "protect");
   const acquireDir = sampleAcquireDir(root, sample.group, sample.name, "protect");
@@ -330,8 +341,8 @@ function prepareDynamic(sample: Sample, options: Options, env: Record<string, st
   requireSuccess(sample.key + " acquisition", acquisitionResult);
   if (!existsSync(workset) || jsonFile(workset).schema !== "atfield-workset-v2") throw new Error("acquisition did not produce a v2 workset: " + workset);
   const protectSize = buildMode(sample, "protect", env);
-  prepareAndVerifyFinalV2(sample, options, env, acquisition, runDir, shellEnvironment, bundleFile, workset);
-  return protectSize;
+  const architectureDeclared = prepareAndVerifyFinalV2(sample, options, env, acquisition, runDir, shellEnvironment, bundleFile, workset);
+  return { size: protectSize, architectureDeclared };
 }
 
 type ValidationIdentity = {
@@ -367,13 +378,15 @@ export function validateFinalV2Batch(
   expectedFieldsInput: string[],
   summaries: Record<string, unknown>[],
   identity: ValidationIdentity,
-): void {
+  architectureReplays: ReadonlyMap<number, { declaration: unknown; traceText: string }> = new Map(),
+): number {
   const expectedFields = sortedStrings(expectedFieldsInput, "target Fields");
   if (!expectedFields.length || expectedFields.length !== expectedFieldsInput.length) {
     throw new Error("frozen Final v2 target must contain a nonempty unique Field set");
   }
   if (!summaries.length) throw new Error("Final v2 validation batch is empty");
   const measured = new Set<string>();
+  let architectureDeclared = 0;
   for (let index = 0; index < summaries.length; index++) {
     const summary = summaries[index]!;
     const label = "Final v2 validation execution " + (index + 1);
@@ -387,9 +400,14 @@ export function validateFinalV2Batch(
       throw new Error(label + " selected a different signed measurement Final");
     }
     const validation = summary.final_v2_validation;
-    if (!isRecord(validation) || validation.verdict !== "PASS" ||
-        validation.observed_page_count !== 0 || validation.final_v2_verification_failure_count !== 0) {
-      throw new Error(label + " failed its raw S3/AEX/measurement/readiness/SGX verification");
+    const strictPass = isRecord(validation) && validation.verdict === "PASS" &&
+      validation.observed_page_count === 0 && validation.final_v2_verification_failure_count === 0;
+    if (strictPass && architectureReplays.has(index)) throw new Error(label + " runner failed despite a strict PASS summary");
+    if (!strictPass) {
+      const replay = architectureReplays.get(index);
+      if (!replay) throw new Error(label + " failed its raw S3/AEX/measurement/readiness/SGX verification");
+      assertDeclaredArchitectureS3(summary, replay.traceText, replay.declaration, identity.signedMeasurementFinalElfSha256);
+      architectureDeclared++;
     }
     const observedIdentity = validation.final_v2_target;
     if (!isRecord(observedIdentity) ||
@@ -412,6 +430,7 @@ export function validateFinalV2Batch(
   }
   const missing = expectedFields.filter((fieldId) => !measured.has(fieldId));
   if (missing.length) throw new Error("Final v2 validation batch did not enter every target Field: " + missing.join(", "));
+  return architectureDeclared;
 }
 
 function validationCommands(sample: Sample, options: Options): Array<{ label: string; args: string[] }> {
@@ -430,7 +449,7 @@ function prepareAndVerifyFinalV2(
   shellEnvironment: Record<string, string>,
   bundleFile: string,
   worksetFile: string,
-): void {
+): boolean {
   const directory = buildDir(sample, "protect");
   const signer = path.join(shellEnvironment.SGX_SDK_ROOT ?? "", "bin", "x64", "sgx_sign");
   const key = path.join(root, "build", "test-signing-key.pem");
@@ -519,8 +538,11 @@ function prepareAndVerifyFinalV2(
     throw new Error("frozen Final v2 target does not bind the acquired workset and all its Fields");
   }
 
+  const declarationFile = path.join(sampleAcquireDir(root, sample.group, sample.name, "protect"), "architectural-s3.json");
+  const declaration = existsSync(declarationFile) ? jsonFile(declarationFile) : undefined;
   const commands = validationCommands(sample, options);
   const summaries: Record<string, unknown>[] = [];
+  const architectureReplays = new Map<number, { declaration: unknown; traceText: string }>();
   for (const [index, validationCommand] of commands.entries()) {
     const artifactDir = path.join(runDir, "final-v2-verification", sample.group, sample.name, String(index + 1).padStart(2, "0"));
     mkdirSync(artifactDir, { recursive: true });
@@ -540,7 +562,7 @@ function prepareAndVerifyFinalV2(
     const callerUid = process.getuid?.(), callerGid = process.getgid?.();
     if (callerUid === undefined || callerGid === undefined) throw new Error("POSIX caller uid/gid are unavailable");
     const invocation = buildPrepareSudoCommand(runner, args, shellEnvironment, callerUid, callerGid);
-    const result = run(invocation.command, invocation.args, root, env);
+    const result = runWithFileStdout(invocation.command, invocation.args, path.join(artifactDir, "runner-summary.json"), root, env);
     returnGeneratedFilesToCaller(artifactDir, callerUid, callerGid, env);
     let summary: unknown;
     try { summary = JSON.parse(result.stdout) as unknown; }
@@ -549,7 +571,15 @@ function prepareAndVerifyFinalV2(
       throw new Error(sample.key + " Final v2 replay did not emit a JSON summary");
     }
     if (!isRecord(summary)) throw new Error(sample.key + " Final v2 replay did not emit a JSON summary");
-    if (result.code !== 0) {
+    if (result.code !== 0 && declaration !== undefined) {
+      const artifacts = summary.artifact_paths;
+      const tracePath = isRecord(artifacts) && typeof artifacts.trace === "string" ? path.resolve(artifacts.trace) : "";
+      if (path.dirname(tracePath) !== path.resolve(artifactDir)) {
+        throw new Error(sample.key + " Final replay trace is outside its artifact directory");
+      }
+      architectureReplays.set(index, { declaration, traceText: readFileSync(tracePath, "utf8") });
+    }
+    if (result.code !== 0 && declaration === undefined) {
       const s3 = Array.isArray(summary.s3_body_page_observations) ? summary.s3_body_page_observations : [];
       const final = isRecord(summary.final_v2_validation) ? summary.final_v2_validation : {};
       throw new Error(sample.key + " Final v2 replay " + validationCommand.label +
@@ -562,9 +592,10 @@ function prepareAndVerifyFinalV2(
     }
     summaries.push(summary);
   }
-  validateFinalV2Batch(expectedFields, summaries, expectedIdentity);
-  console.log(sample.key + ": Final v2 independent replay PASS (" +
+  const declared = validateFinalV2Batch(expectedFields, summaries, expectedIdentity, architectureReplays);
+  console.log(sample.key + ": Final v2 independent replay " + (declared ? "ARCHITECTURAL S3 DECLARED" : "STRICT PASS") + " (" +
     summaries.length + " commands, " + expectedFields.length + " target Fields)");
+  return declared > 0;
 }
 
 function parseHelper(stdout: string): Record<string, unknown> {
@@ -597,8 +628,8 @@ function metric(run: Run, sample: Sample): number | undefined {
   return sample.kind === "micro" ? run.hostEcallNs : run.hostWallNs;
 }
 
-function printReport(samples: Sample[], runs: Run[], sizes: Map<string, Partial<Sizes>>, failures: string[], trials: number): void {
-  console.log("\nSample\tMetric\tRaw median (n/trials)\tDynamic median\tFull REG median\tProtect/raw paired\tNaive/raw paired\tProtect/naive paired\tFailures raw/protect/naive");
+function printReport(samples: Sample[], runs: Run[], sizes: Map<string, Partial<Sizes>>, failures: string[], trials: number, architectureQualified: ReadonlySet<string>): void {
+  console.log("\nSample\tMetric\tFinal validation\tRaw median (n/trials)\tDynamic median\tFull REG median\tProtect/raw paired\tNaive/raw paired\tProtect/naive paired\tFailures raw/protect/naive");
   for (const sample of samples) {
     const selected = (mode: Mode) => runs.filter((run) => run.sample.key === sample.key && run.mode === mode);
     const values = new Map(modes.map((mode) => [mode, median(selected(mode).filter((run) => run.status === "success").map((run) => metric(run, sample)!).filter(Number.isFinite))]));
@@ -624,7 +655,8 @@ function printReport(samples: Sample[], runs: Run[], sizes: Map<string, Partial<
       return value === null || !Number.isFinite(value) ? "invalid (0 pairs)" : value.toFixed(4) + " (" + ratios.length + "/" + trials + " pairs)";
     };
     const counts = modes.map((mode) => selected(mode).filter((run) => run.status === "failed").length).join("/");
-    console.log([sample.key, sample.kind === "micro" ? "host_ecall_ns" : "host_wall_ns", cell("raw"), cell("protect"), cell("protect-naive"), paired("protect", "raw"), paired("protect-naive", "raw"), paired("protect", "protect-naive"), counts].join("\t"));
+    const validation = !sizes.get(sample.key)?.protect ? "FAIL" : architectureQualified.has(sample.key) ? "ARCH-DECLARED" : "STRICT";
+    console.log([sample.key, sample.kind === "micro" ? "host_ecall_ns" : "host_wall_ns", validation, cell("raw"), cell("protect"), cell("protect-naive"), paired("protect", "raw"), paired("protect-naive", "raw"), paired("protect", "protect-naive"), counts].join("\t"));
   }
   console.log("\nBinary sizes\tSample\tMode\tSigned enclave bytes\tPT_LOAD file bytes\tPT_LOAD memory bytes\tExecutable pages");
   for (const sample of samples) for (const mode of modes) {
@@ -651,11 +683,12 @@ function csv(value: unknown): string {
   return /[",\r\n]/.test(text) ? "\"" + text.replace(/"/g, "\"\"") + "\"" : text;
 }
 
-function writeCsv(filename: string, runs: Run[], sizes: Map<string, Partial<Sizes>>): void {
-  const lines = ["sample,trial,mode,status,host_wall_ns,host_ecall_ns,enclave_tsc_ticks,iterations,failure,enclave_bytes,pt_load_file_bytes,pt_load_memory_bytes,executable_pages"];
+function writeCsv(filename: string, runs: Run[], sizes: Map<string, Partial<Sizes>>, architectureQualified: ReadonlySet<string>): void {
+  const lines = ["sample,trial,mode,status,final_v2_validation,host_wall_ns,host_ecall_ns,enclave_tsc_ticks,iterations,failure,enclave_bytes,pt_load_file_bytes,pt_load_memory_bytes,executable_pages"];
   for (const run of runs) {
     const size = sizes.get(run.sample.key)?.[run.mode];
-    lines.push([run.sample.key, run.trial, run.mode, run.status, run.hostWallNs, run.hostEcallNs, run.enclaveTicks, run.iterations,
+    const validation = run.mode !== "protect" ? "" : !size ? "FAIL" : architectureQualified.has(run.sample.key) ? "ARCH-DECLARED" : "STRICT";
+    lines.push([run.sample.key, run.trial, run.mode, run.status, validation, run.hostWallNs, run.hostEcallNs, run.enclaveTicks, run.iterations,
       run.error, size?.enclaveBytes, size?.ptLoadFileBytes, size?.ptLoadMemoryBytes, size?.executablePages].map(csv).join(","));
   }
   const target = path.resolve(root, filename);
@@ -698,6 +731,7 @@ async function main(): Promise<number> {
   const env: Record<string, string | undefined> = { ...process.env, ATFIELD_BENCH_LEASE_ALL: "1", ATFIELD_HOST_RUNNER: "on", ATFIELD_READINESS_BACKEND: "kernel" };
   delete env.ATFIELD_FROZEN_WORKSET;
   const sizes = new Map<string, Partial<Sizes>>(), modeFailures = new Map<string, Partial<Record<Mode, string>>>(), failures: string[] = [], runs: Run[] = [];
+  const architectureQualified = new Set<string>();
   const finalV2GateFailures = new Map<string, string>();
   let bundle = "", acquisition = "", frequency = "", state = path.join(runDir, "frequency-state.json"), applied = false, restored = false;
   let bundleFailure = "", acquisitionFailure = "";
@@ -744,7 +778,9 @@ async function main(): Promise<number> {
     try {
       if (bundleFailure) throw new Error("implement bundle unavailable: " + bundleFailure);
       if (acquisitionFailure) throw new Error("acquisition package unavailable: " + acquisitionFailure);
-      sampleSizes.protect = prepareDynamic(sample, options, env, acquisition, runDir);
+      const prepared = prepareDynamic(sample, options, env, acquisition, runDir);
+      sampleSizes.protect = prepared.size;
+      if (prepared.architectureDeclared) architectureQualified.add(sample.key);
     } catch (error) {
       recordFailure(sample, "protect", error);
       finalV2GateFailures.set(sample.key, error instanceof Error ? error.message : String(error));
@@ -836,8 +872,8 @@ async function main(): Promise<number> {
     for (const task of tasks) runs.push({ ...task, status: "failed", error: "preparation failed: " + (modeFailures.get(task.sample.key)?.[task.mode] ?? "not attempted") });
   }
 
-  printReport(samples, runs, sizes, failures, options.trials);
-  if (options.csv) writeCsv(options.csv, runs, sizes);
+  printReport(samples, runs, sizes, failures, options.trials, architectureQualified);
+  if (options.csv) writeCsv(options.csv, runs, sizes, architectureQualified);
   if (applied && !restored) return 1;
   return failures.length ? 1 : 0;
 }

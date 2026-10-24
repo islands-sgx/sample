@@ -83,3 +83,25 @@ test("Final v2 batch rejects failed business execution even if trace is clean", 
     identity,
   )).toThrow("did not complete successfully");
 });
+
+test("Final v2 batch keeps strict FAIL while allowing a declared architectural page for timing", () => {
+  const withS3 = execution(["field-a", "field-b"], {
+    s3_body_page_observations: [{ field_id: "field-a", page_rva: "0x2000", a: true, d: true }],
+  });
+  Object.assign(withS3.final_v2_validation as Record<string, unknown>, { verdict: "FAIL", observed_page_count: 1 });
+  const effect = { rva: "0x2000", a: true, d: true };
+  const phase = (page_effects: unknown[]) => ({ complete: true, page_size: 4096, page_effects });
+  const traceText = JSON.stringify({ record_type: "ecall", fields: [
+    { field_id: "field-a", phases: { S2_PRETOUCH: phase([effect]), S3_BODY: phase([effect]) } },
+  ] });
+  const declaration = {
+    schema: "atfield-architectural-s3-v1",
+    signed_measurement_final_elf_sha256: identity.signedMeasurementFinalElfSha256,
+    effects: [{ field_id: "field-a", page_rva: "0x2000", a: true, d: true, instruction: "EGETKEY" }],
+  };
+  const replay = new Map([[0, { declaration, traceText }]]);
+  expect(validateFinalV2Batch(["field-a", "field-b"], [withS3], identity, replay)).toBe(1);
+  expect((withS3.final_v2_validation as Record<string, unknown>).verdict).toBe("FAIL");
+  expect(() => validateFinalV2Batch(["field-a", "field-b"], [withS3], identity))
+    .toThrow("raw S3/AEX/measurement/readiness/SGX verification");
+});

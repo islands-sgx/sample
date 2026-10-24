@@ -37,7 +37,12 @@ benchmark modes, and runs paired trials on every bench sample. It keeps the
 normal business path as the main acquisition seed and adds `--self-test` as
 supplemental coverage. The report distinguishes application process wall time
 from micro ECALL nanoseconds and enclave TSC ticks. A direct `protect` build
-uses the frozen v2 workset generated for that sample.
+uses the frozen v2 workset generated for that sample. An optional
+`build/acquire/<group>/<name>/protect/architectural-s3.json` declares known
+ENCLU operand-page effects for an exact signed measurement Final. The benchmark
+labels these runs `ARCH-DECLARED` only when every raw S3 effect matches the
+declaration and was touched in S2 of the same call; the strict S3 verdict
+remains `FAIL`, and an extra page still blocks timing.
 
 The OpenSSL AES-GCM sample times encryption and authenticated decryption of
 one 1 KiB record with a fresh nonce per round. The SHA-256 sample hashes one
