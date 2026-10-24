@@ -167,6 +167,7 @@
             ATFIELD_AR = "${toolchain.atfieldLlc}/bin/llvm-ar";
             ATFIELD_CC = "${toolchain.stdenv.cc}/bin/cc";
             ATFIELD_CXX = "${toolchain.stdenv.cc}/bin/c++";
+            ATFIELD_CXX_RUNTIME_LIBRARY_DIRECTORY = "${pkgs.stdenv.cc.cc.lib}/lib";
             ATFIELD_LLC = "${toolchain.atfieldLlc}/bin/llc";
             ATFIELD_LLD = "${toolchain.lld}/bin/ld.lld";
             ATFIELD_MODE = cmakeMode;

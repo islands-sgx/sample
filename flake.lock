@@ -3,11 +3,11 @@
     "implement": {
       "flake": false,
       "locked": {
-        "lastModified": 1792838265,
-        "narHash": "sha256-2aph9Bqqoz2DCnxg/lO/cO7NLWreM5OpIJumduBl46s=",
+        "lastModified": 1792841058,
+        "narHash": "sha256-88OpEqDxXDpxQ+VJUqFQ9oWRbxvB8vYHRpweRHYeXgI=",
         "ref": "refs/heads/main",
-        "rev": "e2c608fc4fe82673a7990a2f386b6ae2b192ee93",
-        "revCount": 69,
+        "rev": "394d151f56282322a721257e37d88d3ebccb24a7",
+        "revCount": 70,
         "type": "git",
         "url": "ssh://git@github.com/islands-sgx/implement"
       },

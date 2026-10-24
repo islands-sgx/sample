@@ -7,6 +7,7 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { sampleAcquireDir, sampleBuildDir, sampleCorpusPath, sampleWorksetPath } from "./sample-paths.ts";
 
 type Mode = "raw" | "protect" | "protect-naive";
 type Sample = { group: "bench/micro" | "bench/application"; kind: "micro" | "application"; name: string; key: string };
@@ -130,11 +131,11 @@ function storeOutput(attr: string, env: Record<string, string | undefined>): str
 }
 
 function profileDir(sample: Sample): string {
-  return path.join(root, "build", sample.group, sample.name, "protect");
+  return sampleBuildDir(root, sample.group, sample.name, "protect");
 }
 
 function buildDir(sample: Sample, mode: Mode): string {
-  return path.join(root, "build", sample.group, sample.name, mode);
+  return sampleBuildDir(root, sample.group, sample.name, mode);
 }
 
 function readelfFor(directory: string): string | undefined {
@@ -290,18 +291,21 @@ function captureSampleRuntimeEnv(shell: string, env: Record<string, string | und
 }
 
 function prepareDynamic(sample: Sample, options: Options, env: Record<string, string | undefined>, acquisition: string, runDir: string): Size {
-  const pdir = profileDir(sample), bundleFile = path.join(pdir, "profile-bundle.json"), workset = path.join(pdir, "workset.dynamic.v2.json");
+  const pdir = profileDir(sample), bundleFile = path.join(pdir, "profile-bundle.json");
+  const workset = sampleWorksetPath(root, sample.group, sample.name, "protect");
+  const acquireDir = sampleAcquireDir(root, sample.group, sample.name, "protect");
   console.log(sample.key + ": Profile");
   requireSuccess(sample.key + " Profile", run(bun, ["scripts/sample.ts", "profile", sample.group, sample.name, "protect"], root, env));
   if (!existsSync(bundleFile)) throw new Error("Profile bundle missing: " + bundleFile);
 
+  mkdirSync(acquireDir, { recursive: true });
   rmSync(workset, { force: true });
   const prepare = path.join(acquisition, "bin", "atfield-acquire-prepare");
   const trace = path.join(acquisition, "lib", "libatfield_trace.so");
   const explore = path.join(acquisition, "lib", "libatfield_explore.so");
   for (const file of [prepare, trace, explore]) if (!existsSync(file)) throw new Error("acquisition output missing " + file);
   const shell = sample.group.replace("/", "-") + "-" + sample.name + "-protect";
-  const corpus = path.join(runDir, "corpus", sample.group, sample.name);
+  const corpus = path.join(sampleCorpusPath(root, sample.group, sample.name, "protect"), path.basename(runDir));
   const args = ["--bundle", bundleFile, "--collector", trace, "--explore-collector", explore, "--corpus", corpus, "--out", workset];
   if (options.budget !== undefined) args.push("--budget", String(options.budget));
   for (const value of options.mainArgs) args.push("--main-arg", value);

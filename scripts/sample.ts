@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sampleBuildDir, sampleWorksetPath } from "./sample-paths.ts";
 
 type Group = "anchor" | "bench/micro" | "bench/application";
 type Mode = "raw" | "anchor" | "protect" | "protect-naive";
@@ -119,12 +120,12 @@ function requireVariables(names: string[]): Record<string, string> {
 }
 
 function samplePaths(sample: Sample) {
-  return { buildDir: join(projectRoot, "build", sample.group, sample.name, sample.mode) };
+  return { buildDir: sampleBuildDir(projectRoot, sample.group, sample.name, sample.mode) };
 }
 
-function frozenWorkset(sample: Sample, buildDir: string): string {
+function frozenWorkset(sample: Sample): string {
   const configured = process.env.ATFIELD_FROZEN_WORKSET;
-  return configured ? resolve(configured) : join(buildDir, "workset.dynamic.v2.json");
+  return configured ? resolve(configured) : sampleWorksetPath(projectRoot, sample.group, sample.name, sample.mode);
 }
 
 export function isProfileFinalCacheTransition(
@@ -143,9 +144,9 @@ export function isProfileFinalCacheTransition(
   );
 }
 
-function requireFrozenWorkset(sample: Sample, buildDir: string): string {
+function requireFrozenWorkset(sample: Sample): string {
   if (sample.mode === "protect-naive") return "";
-  const path = frozenWorkset(sample, buildDir);
+  const path = frozenWorkset(sample);
   if (!existsSync(path)) fail(`dynamic protect requires an existing frozen v2 workset: ${path}`, 66);
   let workset: Record<string, unknown>;
   try { workset = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>; }
@@ -157,7 +158,7 @@ function requireFrozenWorkset(sample: Sample, buildDir: string): string {
 function buildSample(sample: Sample): void {
   const { buildDir } = samplePaths(sample);
   const dynamicProfile = sample.action === "profile";
-  const worksetPath = sample.mode === "protect" && !dynamicProfile ? requireFrozenWorkset(sample, buildDir) : "";
+  const worksetPath = sample.mode === "protect" && !dynamicProfile ? requireFrozenWorkset(sample) : "";
   ensureNixShell(sample);
   const tool = requireVariables([
     "ATFIELD_CC", "ATFIELD_CXX", "ATFIELD_LLD", "ATFIELD_AR", "ATFIELD_RANLIB", "ATFIELD_NM",
@@ -204,7 +205,7 @@ function buildSample(sample: Sample): void {
     const wantedProfileOnly = dynamicProfile ? "ON" : "OFF";
     const cacheTransition = sample.mode === "protect" && isProfileFinalCacheTransition(
       cacheValue("ATFIELD_PROFILE_ONLY"), cachedWorkset, wantedProfileOnly, worksetPath,
-      frozenWorkset(sample, buildDir),
+      frozenWorkset(sample),
     );
     const wantRoots = cmakeArgs.map((arg) => {
       const assignment = arg.slice(2);
@@ -366,7 +367,7 @@ function validateBuiltProtectIdentity(sample: Sample, buildDir: string): void {
   const policy = sample.mode === "protect-naive" ? "naive" : "dynamic";
   const cachedPolicy = cache.find((line) => line.startsWith("ATFIELD_WORKSET_POLICY:"));
   if (!cachedPolicy?.endsWith(`=${policy}`)) fail(`protect build workset policy mismatch: expected ${policy}`, 66);
-  const expectedPath = sample.mode === "protect-naive" ? join(buildDir, "workset.json") : frozenWorkset(sample, buildDir);
+  const expectedPath = sample.mode === "protect-naive" ? join(buildDir, "workset.json") : frozenWorkset(sample);
   const expectedSchema = sample.mode === "protect-naive" ? "atfield-workset-v1" : "atfield-workset-v2";
   if (ready!.workset !== expectedPath || ready!.workset_schema !== expectedSchema) {
     fail(`protect ready identity does not match ${policy} workset at ${expectedPath}`, 66);
