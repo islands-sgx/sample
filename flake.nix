@@ -133,6 +133,9 @@
             toolchain.implementTools;
           protectEnv = lib.optionalAttrs protectMode {
             ATFIELD_FIELD_TOOL = "${implementRoot}/bin/atfield-field";
+            ATFIELD_LIBRARY_IR_MANIFESTS = lib.concatMapStringsSep ":"
+              (pkg: "${pkg.bc}/library-manifest.json")
+              ([ sgx.trusted.${libraryMode} ] ++ sampleLibraries);
           };
         in
         (pkgs.mkShell.override { stdenv = toolchain.stdenv; }) {

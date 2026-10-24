@@ -4,6 +4,8 @@
   coreutils,
   stdenv,
   llvmTools,
+  bun,
+  implementTools,
   enclaveCompiler,
   sgxSdk,
   mode,
@@ -22,6 +24,7 @@ let
   nativeOnlySources = [ "wolfcrypt/src/sha256_asm.S" ];
 in
 stdenv.mkDerivation {
+  outputs = if mode == "anchor" then [ "out" "bc" ] else [ "out" ];
   pname = "wolfssl-sgx-${mode}";
   inherit version;
 
@@ -30,7 +33,7 @@ stdenv.mkDerivation {
     hash = "sha256-8eEh4stWqkD4XrCZURbJhY0tjxhMCEKOai22a5fiyQM=";
   };
 
-  nativeBuildInputs = [ coreutils stdenv.cc llvmTools ];
+  nativeBuildInputs = [ coreutils stdenv.cc llvmTools ] ++ lib.optionals (mode == "anchor") [ bun ];
   strictDeps = true;
   dontConfigure = true;
   dontStrip = true;
@@ -39,6 +42,7 @@ stdenv.mkDerivation {
   ATFIELD_ANCHOR_PREPARATION = if mode == "anchor" then "1" else "0";
   ATFIELD_PAYLOAD_NAMESPACE = "library/wolfssl/${revision}";
   ATFIELD_LLC = "${llvmTools}/bin/llc";
+  ATFIELD_EXPORT_BACKEND_BITCODE = if mode == "anchor" then "1" else null;
 
   postPatch = ''
     install -m 0644 ${./wolfssl-user_settings.h}       wolfssl/wolfcrypt/user_settings.h
@@ -97,6 +101,11 @@ stdenv.mkDerivation {
         install -Dm0644 "$licenseFile" "$out/share/licenses/$pname/$licenseFile"
       fi
     done
+    ${lib.optionalString (mode == "anchor") ''
+    ${bun}/bin/bun ${implementTools}/build/codegen/collect-library-ir.ts \
+      --object-root "$PWD" --package-root "$out" --output-root "$bc" \
+      --llvm-ar ${llvmTools}/bin/llvm-ar --llvm-nm ${llvmTools}/bin/llvm-nm --archive "$out/lib/libwolfssl-sgx.a"
+    ''}
     runHook postInstall
   '';
 

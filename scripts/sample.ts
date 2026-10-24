@@ -188,6 +188,9 @@ function buildSample(sample: Sample): void {
     tool.SGX_ENCLAVE_CLANG = enclaveClang;
     process.env.ATFIELD_FIELD_TOOL = fieldTool;
     cmakeArgs.push(`-DATFIELD_FIELD_TOOL=${fieldTool}`);
+    const libraryIrManifests = process.env.ATFIELD_LIBRARY_IR_MANIFESTS;
+    if (!libraryIrManifests) fail("ATFIELD_LIBRARY_IR_MANIFESTS is missing from protect shell", 66);
+    cmakeArgs.push(`-DATFIELD_LIBRARY_IR_MANIFESTS=${libraryIrManifests}`);
   }
 
   const cachePath = join(buildDir, "CMakeCache.txt");

@@ -1,4 +1,5 @@
 {
+  lib,
   stdenv,
   binutils,
   callPackage,
@@ -41,12 +42,14 @@ let
     inherit stdenv llvmPackages llvmTools implementTools;
     irConsistent = true;
     anchorPreparation = mode == "anchor";
+    exportIrArtifacts = mode == "anchor";
     extraCmakeFlags = [
       "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY"
     ];
   };
 in
 stdenv.mkDerivation {
+  outputs = if mode == "anchor" then [ "out" "bc" ] else [ "out" ];
   pname = "sgx-trusted-libs-${mode}";
   inherit (sdk) version src;
 
@@ -55,6 +58,7 @@ stdenv.mkDerivation {
   enableParallelBuilding = true;
   hardeningDisable = [ "all" ];
   NIX_CFLAGS_COMPILE = "";
+  ATFIELD_EXPORT_BACKEND_BITCODE = if mode == "anchor" then "1" else null;
 
   nativeBuildInputs = [
     autoconf
@@ -64,7 +68,7 @@ stdenv.mkDerivation {
     libtool
     llvmTools
     python3
-    bun
+  ] ++ lib.optionals (mode == "anchor") [ bun ] ++ [
     which
   ];
 
@@ -113,6 +117,17 @@ stdenv.mkDerivation {
     install -Dm0644 build/linux/libsgx_tservice.a "$out/lib/libsgx_tservice.a"
     install -Dm0644 build/linux/libsgx_tcxx.a "$out/lib/libsgx_tcxx.a"
 
+    ${lib.optionalString (mode == "anchor") ''
+    ${bun}/bin/bun ${implementTools}/build/codegen/collect-library-ir.ts \
+      --object-root "$PWD" --package-root "$out" --output-root "$bc" \
+      --llvm-ar ${llvmTools}/bin/llvm-ar --llvm-nm ${llvmTools}/bin/llvm-nm \
+      --sidecar-source "ipp-crypto=${ippCrypto.bc}/objects" \
+      --archive "$out/lib/libsgx_trts.a" \
+      --archive "$out/lib/libsgx_tstdc.a" \
+      --archive "$out/lib/libsgx_tcrypto.a" \
+      --archive "$out/lib/libsgx_tservice.a" \
+      --archive "$out/lib/libsgx_tcxx.a"
+    ''}
     runHook postInstall
   '';
 }

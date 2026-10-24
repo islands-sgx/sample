@@ -5,6 +5,8 @@
   llvmTools,
   enclaveCompiler,
   sgxSdk,
+  bun,
+  implementTools,
 }:
 {
   pname,
@@ -24,13 +26,15 @@
 assert mode == "raw" || mode == "anchor";
 assert (headerSource == null) != (headerText == null);
 stdenv.mkDerivation {
+  outputs = if mode == "anchor" then [ "out" "bc" ] else [ "out" ];
   inherit pname version src;
-  nativeBuildInputs = [ coreutils llvmTools ];
+  nativeBuildInputs = [ coreutils llvmTools ] ++ lib.optionals (mode == "anchor") [ bun ];
   strictDeps = true;
   dontConfigure = true;
   dontStrip = true;
   NIX_CFLAGS_COMPILE = "";
   SOURCE_DATE_EPOCH = "1";
+  ATFIELD_EXPORT_BACKEND_BITCODE = if mode == "anchor" then "1" else null;
   ATFIELD_ANCHOR_PREPARATION = if mode == "anchor" then "1" else "0";
   ATFIELD_PAYLOAD_NAMESPACE = logicalPackage;
   ATFIELD_LLC = "${llvmTools}/bin/llc";
@@ -76,6 +80,11 @@ EOF
         install -Dm0644 "$licenseFile" "$out/share/licenses/${pname}/$licenseFile"
       fi
     done
+    ${lib.optionalString (mode == "anchor") ''
+    ${bun}/bin/bun ${implementTools}/build/codegen/collect-library-ir.ts \
+      --object-root "$PWD" --package-root "$out" --output-root "$bc" \
+      --llvm-ar ${llvmTools}/bin/llvm-ar --llvm-nm ${llvmTools}/bin/llvm-nm --archive "$out/lib/${archiveName}"
+    ''}
     runHook postInstall
   '';
 

@@ -5,6 +5,7 @@ let
     inherit (toolchain) stdenv;
     llvmTools = toolchain.atfieldLlc;
     enclaveCompiler = toolchain.enclaveCompiler;
+    implementTools = toolchain.implementTools;
     sgxSdk = sgx.sdk;
   };
   curveSrc = pkgs.fetchFromGitHub {
@@ -185,6 +186,7 @@ in
       inherit (toolchain) stdenv;
       llvmTools = toolchain.atfieldLlc;
       enclaveCompiler = toolchain.enclaveCompiler;
+      implementTools = toolchain.implementTools;
       sgxSdk = sgx.sdk;
       mode = "raw";
     };
@@ -192,6 +194,7 @@ in
       inherit (toolchain) stdenv;
       llvmTools = toolchain.atfieldLlc;
       enclaveCompiler = toolchain.enclaveCompiler;
+      implementTools = toolchain.implementTools;
       sgxSdk = sgx.sdk;
       mode = "anchor";
     };

@@ -13,10 +13,12 @@
   llvmTools ? (if llvmPackages == null then null else llvmPackages.llvm),
   irConsistent ? false,
   anchorPreparation ? false,
+  exportIrArtifacts ? false,
   extraCmakeFlags ? [ ],
 }:
 assert !irConsistent || llvmPackages != null;
 assert !(irConsistent || anchorPreparation) || implementTools != null;
+assert !exportIrArtifacts || irConsistent;
 let
   anchorFlag = if anchorPreparation then "1" else "0";
   makeIrConsistentCompiler = name: compiler: writeShellScript name ''
@@ -53,6 +55,7 @@ let
   '';
 in
 stdenv.mkDerivation rec {
+  outputs = if exportIrArtifacts then [ "out" "bc" ] else [ "out" ];
   pname = "ipp-crypto";
   version = "2021.12.1";
 
@@ -149,6 +152,8 @@ stdenv.mkDerivation rec {
 
   '';
 
+  ATFIELD_EXPORT_BACKEND_BITCODE = if exportIrArtifacts then "1" else null;
+
   env.NIX_CFLAGS_COMPILE =
     if irConsistent then "" else "-Wno-error=stringop-overflow";
 
@@ -164,6 +169,13 @@ stdenv.mkDerivation rec {
     cmakeFlagsArray+=("-DCMAKE_C_COMPILER_RANLIB=${llvmTools}/bin/llvm-ranlib")
     cmakeFlagsArray+=("-DCMAKE_CXX_COMPILER_AR=${llvmTools}/bin/llvm-ar")
     cmakeFlagsArray+=("-DCMAKE_CXX_COMPILER_RANLIB=${llvmTools}/bin/llvm-ranlib")
+  '';
+
+  postInstall = lib.optionalString exportIrArtifacts ''
+    ${bun}/bin/bun ${implementTools}/build/codegen/collect-library-ir.ts \
+      --object-root "$PWD" --package-root "$out" --output-root "$bc" \
+      --llvm-ar ${llvmTools}/bin/llvm-ar --llvm-nm ${llvmTools}/bin/llvm-nm \
+      --archive "$out/lib/intel64/libippcp.a"
   '';
 
   nativeBuildInputs = [

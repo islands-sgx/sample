@@ -46,6 +46,7 @@ let
     ];
 in
 stdenv.mkDerivation {
+  outputs = if mode == "anchor" then [ "out" "bc" ] else [ "out" ];
   pname = "mcl-sgx-${mode}";
   inherit version;
 
@@ -55,7 +56,7 @@ stdenv.mkDerivation {
     hash = "sha256-S+6/HQwSf51/ROrFe/BOxu3Iy5QNudmcjfuURN6J/HQ=";
   };
 
-  nativeBuildInputs = [ coreutils gnumake python3 bun llvmTools ];
+  nativeBuildInputs = [ coreutils gnumake python3 ] ++ lib.optionals (mode == "anchor") [ bun ] ++ [ llvmTools ];
 
   dontConfigure = true;
   dontStrip = true;
@@ -64,6 +65,7 @@ stdenv.mkDerivation {
   ATFIELD_ANCHOR_PREPARATION = if mode == "anchor" then "1" else "0";
   ATFIELD_PAYLOAD_NAMESPACE = "library/mcl/${revision}";
   ATFIELD_LLC = "${llvmTools}/bin/llc";
+  ATFIELD_EXPORT_BACKEND_BITCODE = if mode == "anchor" then "1" else null;
 
   buildPhase = ''
     runHook preBuild
@@ -116,6 +118,11 @@ stdenv.mkDerivation {
     cp -R include/cybozu "$out/include/"
     install -Dm0644 COPYRIGHT "$out/share/licenses/$pname/COPYRIGHT"
 
+    ${lib.optionalString (mode == "anchor") ''
+    ${bun}/bin/bun ${implementTools}/build/codegen/collect-library-ir.ts \
+      --object-root "$PWD" --package-root "$out" --output-root "$bc" \
+      --llvm-ar ${llvmTools}/bin/llvm-ar --llvm-nm ${llvmTools}/bin/llvm-nm --archive "$out/lib/libmcl_sgx.a"
+    ''}
     runHook postInstall
   '';
 

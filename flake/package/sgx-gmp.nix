@@ -3,6 +3,7 @@
   fetchFromGitHub,
   stdenv,
   coreutils,
+  bun,
   gnumake,
   m4,
   runCommand,
@@ -10,6 +11,7 @@
   llvmTools,
   enclaveCompiler,
   sgxSdk,
+  implementTools,
   walletSource,
   mode,
 }:
@@ -46,6 +48,7 @@ let
   '';
 in
 stdenv.mkDerivation {
+  outputs = if mode == "anchor" then [ "out" "bc" ] else [ "out" ];
   pname = "intel-sgx-gmp-${mode}";
   version = "6.1.2";
   src = fetchFromGitHub {
@@ -56,7 +59,7 @@ stdenv.mkDerivation {
     name = "sgx-gmp-${revision}";
   };
 
-  nativeBuildInputs = [ coreutils gnumake m4 llvmTools ];
+  nativeBuildInputs = [ coreutils gnumake m4 llvmTools ] ++ lib.optionals (mode == "anchor") [ bun ];
   dontConfigure = true;
   dontStrip = true;
   NIX_CFLAGS_COMPILE = "";
@@ -64,6 +67,7 @@ stdenv.mkDerivation {
   ATFIELD_ANCHOR_PREPARATION = if mode == "anchor" then "1" else "0";
   ATFIELD_PAYLOAD_NAMESPACE = "library/intel-sgx-gmp/${revision}";
   ATFIELD_LLC = "${llvmTools}/bin/llc";
+  ATFIELD_EXPORT_BACKEND_BITCODE = if mode == "anchor" then "1" else null;
 
   buildPhase = ''
     runHook preBuild
@@ -106,6 +110,11 @@ stdenv.mkDerivation {
       fi
     done
 
+    ${lib.optionalString (mode == "anchor") ''
+    ${bun}/bin/bun ${implementTools}/build/codegen/collect-library-ir.ts \
+      --object-root "$PWD" --package-root "$out" --output-root "$bc" \
+      --llvm-ar ${llvmTools}/bin/llvm-ar --llvm-nm ${llvmTools}/bin/llvm-nm --archive "$out/lib/libsgx_tgmp.a"
+    ''}
     runHook postInstall
   '';
 

@@ -15,6 +15,7 @@ let
     m4 = pkgs.m4;
     llvmTools = toolchain.atfieldLlc;
     enclaveCompiler = toolchain.enclaveCompiler;
+    implementTools = toolchain.implementTools;
     sgxSdk = sgx.sdk;
     walletSource = sgxSources.sgxwallet;
     inherit mode;

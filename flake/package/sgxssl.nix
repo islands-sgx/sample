@@ -48,6 +48,7 @@ let
   ];
 in
 stdenv.mkDerivation {
+  outputs = if mode == "anchor" then [ "out" "bc" ] else [ "out" ];
   pname = "intel-sgx-ssl-${mode}";
   inherit version;
 
@@ -62,7 +63,7 @@ stdenv.mkDerivation {
     patch
     llvmTools
     perl
-    bun
+  ] ++ lib.optionals (mode == "anchor") [ bun ] ++ [
     which
   ];
 
@@ -75,6 +76,7 @@ stdenv.mkDerivation {
   ATFIELD_ANCHOR_PREPARATION = if mode == "anchor" then "1" else "0";
   ATFIELD_PAYLOAD_NAMESPACE = "library/intel-sgx-ssl/${revision}";
   ATFIELD_LLC = "${llvmTools}/bin/llc";
+  ATFIELD_EXPORT_BACKEND_BITCODE = if mode == "anchor" then "1" else null;
 
   postPatch = ''
     patchShebangs Linux/build_openssl.sh
@@ -177,6 +179,14 @@ patch -d \"\$OPENSSL_VERSION\" -p1 --batch --forward --fuzz=0 < ${./patches/open
       install -m 0644 "Linux/package/lib64/$archive" "$out/lib/$archive"
     done
 
+    ${lib.optionalString (mode == "anchor") ''
+    ${bun}/bin/bun ${implementTools}/build/codegen/collect-library-ir.ts \
+      --object-root "$PWD" --package-root "$out" --output-root "$bc" \
+      --llvm-ar ${llvmTools}/bin/llvm-ar --llvm-nm ${llvmTools}/bin/llvm-nm \
+      --archive "$out/lib/libsgx_tsgxssl_crypto.a" \
+      --archive "$out/lib/libsgx_tsgxssl.a" \
+      --archive "$out/lib/libsgx_usgxssl.a"
+    ''}
     runHook postInstall
   '';
 
