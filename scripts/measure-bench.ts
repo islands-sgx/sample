@@ -282,6 +282,11 @@ export function buildPrepareSudoCommand(
   return { command: "sudo", args: ["-n", "--", "env", "-i", ...assignments, preparePath, ...prepareArgs] };
 }
 
+function returnGeneratedFilesToCaller(directory: string, uid: number, gid: number, env: Record<string, string | undefined>): void {
+  if (!existsSync(directory)) return;
+  requireSuccess("restore generated file ownership", run("sudo", ["-n", "--", "chown", "-R", `${uid}:${gid}`, directory], root, env));
+}
+
 function captureSampleRuntimeEnv(shell: string, env: Record<string, string | undefined>): Record<string, string> {
   const cleanEnv = { ...env };
   for (const key of Object.keys(cleanEnv)) if (key.startsWith("ATFIELD_")) delete cleanEnv[key];
@@ -306,6 +311,7 @@ function prepareDynamic(sample: Sample, options: Options, env: Record<string, st
   for (const file of [prepare, trace, explore]) if (!existsSync(file)) throw new Error("acquisition output missing " + file);
   const shell = sample.group.replace("/", "-") + "-" + sample.name + "-protect";
   const corpus = path.join(sampleCorpusPath(root, sample.group, sample.name, "protect"), path.basename(runDir));
+  mkdirSync(path.dirname(corpus), { recursive: true });
   const args = ["--bundle", bundleFile, "--collector", trace, "--explore-collector", explore, "--corpus", corpus, "--out", workset];
   if (options.budget !== undefined) args.push("--budget", String(options.budget));
   for (const value of options.mainArgs) args.push("--main-arg", value);
@@ -319,7 +325,9 @@ function prepareDynamic(sample: Sample, options: Options, env: Record<string, st
   const callerUid = process.getuid?.(), callerGid = process.getgid?.();
   if (callerUid === undefined || callerGid === undefined) throw new Error("POSIX caller uid/gid are unavailable");
   const invocation = buildPrepareSudoCommand(prepare, args, shellEnvironment, callerUid, callerGid);
-  requireSuccess(sample.key + " acquisition", run(invocation.command, invocation.args, root, env));
+  const acquisitionResult = run(invocation.command, invocation.args, root, env);
+  returnGeneratedFilesToCaller(corpus, callerUid, callerGid, env);
+  requireSuccess(sample.key + " acquisition", acquisitionResult);
   if (!existsSync(workset) || jsonFile(workset).schema !== "atfield-workset-v2") throw new Error("acquisition did not produce a v2 workset: " + workset);
   const protectSize = buildMode(sample, "protect", env);
   prepareAndVerifyFinalV2(sample, options, env, acquisition, runDir, shellEnvironment, bundleFile, workset);
@@ -533,6 +541,7 @@ function prepareAndVerifyFinalV2(
     if (callerUid === undefined || callerGid === undefined) throw new Error("POSIX caller uid/gid are unavailable");
     const invocation = buildPrepareSudoCommand(runner, args, shellEnvironment, callerUid, callerGid);
     const result = run(invocation.command, invocation.args, root, env);
+    returnGeneratedFilesToCaller(artifactDir, callerUid, callerGid, env);
     requireSuccess(sample.key + " Final v2 replay " + validationCommand.label, result);
     const summary = JSON.parse(result.stdout) as unknown;
     if (!isRecord(summary)) throw new Error(sample.key + " Final v2 replay did not emit a JSON summary");
